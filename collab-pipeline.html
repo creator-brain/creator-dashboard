@@ -1,0 +1,980 @@
+<title>Collab Pipeline</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600;9..144,700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: fixed forest-green sidebar + cream workspace; greeting, dark banner, pastel stat tiles, then the scrolling board; one right-side drawer for detail or the sync log. */
+:root{
+  --bg:#fbf7f0; --surface:#fffdf9; --surface-2:#f4efe5; --ink:#1f2b1f; --muted:#737a6c; --line:#ebe4d6;
+  --forest:#2e4a2b; --forest-2:#3c5c38; --forest-ink:#eef3e6; --forest-muted:#a9bba3;
+  --accent:#2e4a2b; --accent-soft:#e7eedb; --pink:#f7d3d8; --pink-strong:#e2708a; --peach:#fbe5d3; --lime:#e9edbd; --sage:#dfe7cf; --lav:#ece4f2;
+  --focus:#e2708a; --ok:#3f7a3a; --warn:#b06a12; --crit:#c2354f;
+  --font-display:"Fraunces",ui-serif,Georgia,serif;
+  --font-body:"Inter",ui-sans-serif,system-ui,-apple-system,sans-serif;
+  --font-mono:"JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,monospace;
+  --n-red-bg:#fbe1e3; --n-red:#a3304a; --n-orange-bg:#fbe8d8; --n-orange:#94530f; --n-yellow-bg:#f6f0cf; --n-yellow:#776012;
+  --n-brown-bg:#efe5da; --n-brown:#6b4b31; --n-purple-bg:#eee5f4; --n-purple:#66408f; --n-gray-bg:#eeebe4; --n-gray:#5a5c55;
+  --n-blue-bg:#e3ecf2; --n-blue:#2c5a7f; --n-pink-bg:#f9e1e7; --n-pink:#a8385e; --n-green-bg:#e3eed8; --n-green:#355f2f;
+  --shadow:0 1px 2px rgba(46,74,43,.05),0 6px 18px rgba(46,74,43,.06);
+  color-scheme:light;
+}
+*{box-sizing:border-box}
+[hidden]{display:none!important}
+html,body{height:100%}
+body{background:var(--bg);color:var(--ink);font-family:var(--font-body);font-size:14px;line-height:1.45}
+body::before{content:"";position:fixed;inset:0 0 auto;height:env(safe-area-inset-top,0px);z-index:10;background:var(--forest)}
+button,input,select,textarea{font:inherit;color:inherit}
+:focus-visible{outline:2px solid var(--focus);outline-offset:2px}
+
+.app{display:grid;grid-template-columns:232px minmax(0,1fr);min-height:100%}
+/* Sidebar */
+.side{background:var(--forest);color:var(--forest-ink);display:flex;flex-direction:column;gap:22px;padding:18px 14px;position:sticky;top:env(safe-area-inset-top,0px);height:calc(100vh - env(safe-area-inset-top,0px));padding-left:max(14px,env(safe-area-inset-left,0px))}
+.logo{display:flex;align-items:center;gap:10px;padding:4px 6px}
+.logo .mark{width:34px;height:34px;border-radius:50%;background:var(--pink);color:var(--forest);display:grid;place-items:center;font-family:var(--font-display);font-weight:700;font-size:15px;flex:none}
+.logo b{display:block;font-family:var(--font-display);font-size:16px;font-weight:600;line-height:1.15}
+.logo span{font-size:12px;color:var(--forest-muted)}
+.nav-sec{display:flex;flex-direction:column;gap:3px}
+.nav-sec h4{margin:0 0 4px;padding:0 10px;font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.08em;color:var(--forest-muted)}
+.nav-btn{display:flex;align-items:center;gap:10px;width:100%;border:0;background:none;color:var(--forest-ink);padding:8px 10px;border-radius:8px;font-size:13.5px;cursor:pointer;text-align:left}
+.nav-btn:hover{background:var(--forest-2)}
+.nav-btn[aria-current="true"]{background:var(--pink);color:var(--forest);font-weight:600}
+.nav-btn .ic{width:16px;text-align:center;opacity:.85}
+.nav-btn .n{margin-left:auto;font-size:11px;font-weight:600;background:var(--forest-2);color:var(--forest-ink);border-radius:9px;padding:1px 7px;font-variant-numeric:tabular-nums}
+.nav-btn[aria-current="true"] .n{background:var(--surface);color:var(--forest)}
+.dot{width:8px;height:8px;border-radius:50%;background:#8fd17f;flex:none}
+.dot.busy{background:#f0b45c;animation:pulse 1s infinite}
+@keyframes pulse{50%{opacity:.35}}
+
+.main-col{min-width:0;display:flex;flex-direction:column}
+.gutter{padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px))}
+@media (min-width:900px){.gutter{padding-left:28px;padding-right:max(28px,env(safe-area-inset-right,0px))}}
+header.top{position:sticky;top:env(safe-area-inset-top,0px);z-index:5;background:var(--bg);border-bottom:1px solid var(--line)}
+.top-in{display:flex;align-items:center;gap:12px;padding-block:12px;flex-wrap:wrap}
+.search{flex:1 1 220px;max-width:380px;min-width:0;display:flex;align-items:center;gap:8px;background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:7px 12px;color:var(--muted)}
+.search input{border:0;background:none;outline:none;flex:1;min-width:0;font-size:13.5px;color:var(--ink)}
+.top-right{margin-left:auto;display:flex;align-items:center;gap:10px}
+.pill{display:inline-flex;align-items:center;gap:7px;font-size:12.5px;color:var(--muted);background:var(--surface);border:1px solid var(--line);border-radius:999px;padding:5px 11px;white-space:nowrap}
+.pill .dot{background:var(--ok)}
+button.pill{cursor:pointer;font:inherit;font-size:12.5px}
+button.pill:hover:not(:disabled){border-color:var(--accent);color:var(--ink)}
+button.pill:disabled{cursor:default}
+.pill .rf{font-size:13px;color:var(--accent)}
+.pill .tm{color:var(--muted);font-variant-numeric:tabular-nums}
+.avatar{width:32px;height:32px;border-radius:50%;background:var(--pink);color:var(--forest);display:grid;place-items:center;font-weight:700;font-size:13px;flex:none}
+.btn{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--line);background:var(--surface);border-radius:9px;padding:7px 12px;font-size:13px;font-weight:500;cursor:pointer}
+.btn:hover{filter:brightness(.97)}
+.btn.primary{background:var(--forest);border-color:var(--forest);color:var(--forest-ink)}
+.badge{min-width:18px;height:18px;padding:0 5px;border-radius:9px;background:var(--pink-strong);color:#fff;font-size:11px;font-weight:600;display:inline-grid;place-items:center}
+.badge[data-n="0"]{background:var(--forest-2);color:var(--forest-ink)}
+.mock-tag{font-size:10.5px;font-weight:600;color:var(--forest);background:var(--lime);border-radius:4px;padding:1px 6px;text-transform:uppercase;letter-spacing:.06em}
+
+main{display:flex;flex-direction:column;gap:20px;padding-block:24px 48px}
+.hello h1{font-family:var(--font-display);font-weight:600;font-size:clamp(26px,3.2vw,34px);letter-spacing:-.015em;margin:0;line-height:1.1;text-wrap:balance}
+.hello p{margin:6px 0 0;color:var(--muted)}
+.hello-row{display:flex;justify-content:space-between;align-items:flex-end;gap:14px;flex-wrap:wrap}
+.banner{background:var(--forest);color:var(--forest-ink);border-radius:14px;padding:14px 16px;display:flex;align-items:center;gap:14px;flex-wrap:wrap}
+.banner .bi{width:34px;height:34px;border-radius:50%;background:var(--forest-2);display:grid;place-items:center;flex:none;font-size:15px}
+.banner .bt{flex:1 1 240px;min-width:0}
+.banner b{display:block;font-size:14.5px}
+.banner span{font-size:12.5px;color:var(--forest-muted)}
+.banner .btn{background:var(--surface);color:var(--forest);border-color:transparent}
+
+.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px}
+.kpi{position:relative;border:1px solid transparent;border-radius:14px;padding:14px 16px 14px;text-align:left;cursor:pointer;display:flex;flex-direction:column;gap:3px;color:var(--ink);overflow:hidden}
+.kpi:nth-child(1){background:var(--pink)} .kpi:nth-child(2){background:var(--peach)} .kpi:nth-child(3){background:var(--n-red-bg)}
+.kpi:nth-child(4){background:var(--lime)} .kpi:nth-child(5){background:var(--sage)} .kpi:nth-child(6){background:var(--lav)}
+.kpi:hover{border-color:var(--forest)}
+.kpi.on{border-color:var(--forest);box-shadow:0 0 0 2px var(--forest) inset}
+.kpi .l{font-size:12.5px;color:var(--ink);font-weight:500;opacity:.8;padding-right:30px}
+.kpi .v{font-family:var(--font-display);font-size:32px;font-weight:600;font-variant-numeric:tabular-nums;line-height:1.1}
+.kpi .s{font-size:12px;color:var(--muted)}
+.kpi .ico{position:absolute;top:12px;right:12px;width:26px;height:26px;border-radius:50%;background:var(--surface);display:grid;place-items:center;font-size:12px;opacity:.9}
+.kpi.crit .v{color:var(--crit)}
+
+.flow,.panel{background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:16px 18px;display:flex;flex-direction:column;gap:12px;box-shadow:var(--shadow)}
+.flow-head{display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;align-items:baseline}
+.flow h2,.how h2,.board-h h2{font-family:var(--font-display);font-size:18px;margin:0;font-weight:600}
+.flow .hint{font-size:12.5px;color:var(--muted)}
+.bd-wrap{overflow-x:auto;margin-inline:-4px;padding:0 4px 4px}
+.bd{display:grid;grid-auto-flow:column;grid-auto-columns:minmax(78px,1fr);gap:8px;align-items:end;width:100%}
+.bd-l{overflow-wrap:anywhere}
+.bd-col{display:flex;flex-direction:column;align-items:stretch;gap:6px;border:1px solid var(--line);background:var(--bg);border-radius:12px;padding:10px 8px 9px;cursor:pointer;text-align:center;height:100%}
+.bd-col:hover{border-color:var(--pink-strong)}
+.bd-col.zero{opacity:.55}
+.bd-n{font-family:var(--font-display);font-size:24px;font-weight:600;line-height:1;font-variant-numeric:tabular-nums}
+.bd-track{height:84px;display:flex;align-items:flex-end;justify-content:center;border-bottom:1px solid var(--line)}
+.bd-fill{width:60%;max-width:34px;border-radius:6px 6px 2px 2px;min-height:3px}
+.bd-l{font-size:11.5px;line-height:1.25;color:var(--ink);font-weight:500;min-height:2.5em;display:flex;align-items:flex-start;justify-content:center}
+.bd-ph{font-size:10.5px;text-transform:uppercase;letter-spacing:.07em;color:var(--muted)}
+.bd-col.ph-start{position:relative}
+.x-btn{border:0;background:none;color:var(--muted);cursor:pointer;font-size:18px;line-height:1;padding:2px 7px;border-radius:7px}
+.x-btn:hover{background:var(--surface-2);color:var(--ink)}
+.flow-head .right{display:flex;align-items:center;gap:10px}
+.side-x{margin-left:auto;border:0;background:none;color:var(--forest-muted);cursor:pointer;font-size:16px;padding:2px 6px;border-radius:6px}
+.side-x:hover{background:var(--forest-2);color:var(--forest-ink)}
+.menu-btn{border:1px solid var(--line);background:var(--surface);border-radius:9px;width:34px;height:34px;cursor:pointer;font-size:15px;color:var(--forest)}
+.app.side-closed{grid-template-columns:minmax(0,1fr)}
+.load-panel{background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:22px;display:flex;flex-direction:column;gap:6px;align-items:flex-start}
+.load-panel b{font-family:var(--font-display);font-size:18px;font-weight:600}
+.load-panel span{color:var(--muted);max-width:60ch}
+.load-panel div{margin-top:8px}
+.dot.off{background:var(--crit)}
+.st.failed{background:var(--n-red-bg);color:var(--n-red)} .st.unknown{background:var(--n-orange-bg);color:var(--n-orange)}
+.what.err{color:var(--crit);font-size:12.5px}
+.btn:disabled{opacity:.55;cursor:default}
+.side{overflow-y:auto}
+.board-h{scroll-margin-top:calc(72px + env(safe-area-inset-top,0px))}
+.logo > div{min-width:0}
+.logo b{font-size:15px;white-space:nowrap}
+.logo span{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.subnav{display:flex;flex-direction:column;gap:1px;margin:2px 0 8px 17px;padding-left:8px;border-left:1px solid var(--forest-2)}
+.subnav:empty{display:none}
+.nav-btn .chev{font-size:11px;opacity:.75;transition:transform .15s;width:12px;text-align:center}
+.nav-btn .chev{margin-left:auto}
+.nav-btn .n + .chev{margin-left:6px}
+.nav-btn[aria-expanded="false"] .chev{transform:rotate(-90deg)}
+.sub-ph{font-size:10px;text-transform:uppercase;letter-spacing:.09em;color:var(--forest-muted);padding:8px 8px 3px;opacity:.8}
+.sub-btn{display:flex;align-items:center;gap:8px;border:0;background:none;color:var(--forest-ink);opacity:.82;padding:5px 8px;border-radius:7px;font-size:12.5px;cursor:pointer;text-align:left;width:100%}
+.sub-btn:hover{background:var(--forest-2);opacity:1}
+.sub-btn[aria-current="true"]{background:var(--forest-2);opacity:1;font-weight:600;box-shadow:inset 2px 0 0 var(--pink)}
+.sub-btn i{width:8px;height:8px;border-radius:50%;flex:none}
+.sub-btn .n{margin-left:auto;font-size:11px;font-variant-numeric:tabular-nums;color:var(--forest-muted)}
+.sub-btn.zero{opacity:.45}
+.board.solo,.board.solo .phase,.board.solo .cols{width:100%}
+.col.solo{width:100%;max-height:none}
+.col.solo .col-body{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));align-items:start}
+@media (max-width:899px){.subnav{flex-direction:row;flex-wrap:wrap;width:100%;margin:0;border-left:0;padding-left:0}.sub-ph{display:none}.sub-btn{width:auto}}
+.app.side-closed .side{display:none}
+.seg{border:0;padding:0 6px;font-size:11.5px;font-weight:600;cursor:pointer;white-space:nowrap;overflow:hidden;min-width:4px;border-radius:3px}
+.seg:hover{filter:brightness(.95)}
+.legend{display:flex;flex-wrap:wrap;gap:6px 14px;font-size:12px;color:var(--muted)}
+.legend span{display:inline-flex;align-items:center;gap:5px}
+.legend i{width:10px;height:10px;border-radius:3px;display:inline-block}
+
+.btabs{display:flex;gap:4px;padding:4px;background:var(--surface-2);border:1px solid var(--line);border-radius:12px;width:max-content;max-width:100%;margin-bottom:-4px}
+.btabs button{border:0;background:none;padding:7px 14px;border-radius:9px;font-size:13.5px;color:var(--muted);cursor:pointer;display:flex;gap:7px;align-items:center;white-space:nowrap}
+.btabs button:hover{color:var(--ink)}
+.btabs button[aria-selected="true"]{background:var(--surface);color:var(--forest);font-weight:600;box-shadow:var(--shadow)}
+.btabs .n{font-size:11px;font-weight:600;background:var(--surface-2);border:1px solid var(--line);border-radius:9px;padding:0 6px;font-variant-numeric:tabular-nums}
+.card .when{font-size:11.5px;font-weight:700;color:var(--n-blue)}
+.card .when.past{color:var(--crit)}
+.board-h{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap}
+.controls{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.seg-ctl{display:inline-flex;border:1px solid var(--line);border-radius:9px;overflow:hidden;background:var(--surface)}
+.seg-ctl button{border:0;background:none;padding:6px 12px;font-size:13px;cursor:pointer;font-weight:500;color:var(--muted)}
+.seg-ctl button[aria-pressed="true"]{background:var(--forest);color:var(--forest-ink)}
+.controls select{border:1px solid var(--line);background:var(--surface);border-radius:9px;padding:6px 10px;font-size:13px}
+.ms{position:relative}
+.ms summary{list-style:none;display:flex;align-items:center;gap:10px;border:1px solid var(--line);background:var(--surface);border-radius:9px;padding:6px 10px;font-size:13px;cursor:pointer;user-select:none;white-space:nowrap}
+.ms summary::-webkit-details-marker{display:none}
+.ms summary:hover{border-color:var(--accent)}
+.ms.on summary{border-color:var(--accent);background:var(--accent-soft);font-weight:600}
+.ms[open] summary{border-color:var(--pink-strong)}
+.ms-c{font-size:11px;color:var(--muted);margin-left:auto}
+.ms-pop{position:absolute;z-index:30;top:calc(100% + 6px);left:0;min-width:210px;background:var(--surface);border:1px solid var(--line);border-radius:11px;box-shadow:var(--shadow);padding:6px}
+.ms-pop label{display:flex;align-items:center;gap:9px;padding:6px 8px;border-radius:7px;font-size:13px;cursor:pointer}
+.ms-pop label:hover{background:var(--surface-2)}
+.ms-pop input{accent-color:var(--forest);margin:0}
+.ms-pop .sw{width:9px;height:9px;border-radius:50%;flex:none}
+.ms-pop .ms-foot{display:flex;justify-content:space-between;border-top:1px solid var(--line);margin-top:4px;padding:6px 6px 2px}
+.ms-pop .ms-foot button{border:0;background:none;color:var(--accent);font-size:12.5px;font-weight:600;cursor:pointer;padding:2px}
+.ms-pop .ms-foot button:hover{text-decoration:underline}
+.chk{display:inline-flex;align-items:center;gap:6px;font-size:13px;color:var(--muted);cursor:pointer}
+.chk input{accent-color:var(--forest)}
+
+.board-wrap{overflow-x:auto;padding-bottom:8px;margin-inline:-4px}
+.board{display:flex;gap:20px;align-items:flex-start;padding:2px 4px;width:max-content}
+.phase{display:flex;flex-direction:column;gap:8px}
+.phase-h{font-size:11.5px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);font-weight:600;display:flex;gap:8px;align-items:center;padding-left:2px}
+.phase-h::after{content:"";height:1px;background:var(--line);flex:1;min-width:20px}
+.cols{display:flex;gap:10px;align-items:flex-start}
+.col{width:268px;background:var(--surface-2);border-radius:14px;display:flex;flex-direction:column;max-height:calc(100vh - 200px);border:1px solid transparent;transition:border-color .12s,background .12s}
+.col.over{border-color:var(--pink-strong);background:var(--pink)}
+.col-h{display:flex;align-items:center;gap:8px;padding:11px 11px 8px}
+.col-h .count{color:var(--muted);font-size:12px;font-variant-numeric:tabular-nums}
+.col-h .collapse{margin-left:auto;border:0;background:none;color:var(--muted);cursor:pointer;padding:2px 6px;border-radius:5px;font-size:12px}
+.col-h .collapse:hover{background:var(--surface)}
+.col-body{display:flex;flex-direction:column;gap:8px;padding:0 8px 10px;overflow-y:auto;min-height:48px}
+.col.collapsed{width:44px;cursor:pointer}
+.col.collapsed .col-h{flex-direction:column;padding:10px 0;gap:10px}
+.col.collapsed .col-h .chip{writing-mode:vertical-rl;transform:rotate(180deg)}
+.col.collapsed .col-body,.col.collapsed .collapse{display:none}
+.empty{font-size:12px;color:var(--muted);text-align:center;padding:14px 4px;border:1px dashed var(--line);border-radius:10px}
+
+.chip{display:inline-flex;align-items:center;gap:5px;border-radius:999px;padding:1px 8px;font-size:12px;font-weight:500;white-space:nowrap;max-width:100%;overflow:hidden;text-overflow:ellipsis}
+.c-red{background:var(--n-red-bg);color:var(--n-red)} .c-orange{background:var(--n-orange-bg);color:var(--n-orange)}
+.c-yellow{background:var(--n-yellow-bg);color:var(--n-yellow)} .c-brown{background:var(--n-brown-bg);color:var(--n-brown)}
+.c-purple{background:var(--n-purple-bg);color:var(--n-purple)} .c-gray,.c-default{background:var(--n-gray-bg);color:var(--n-gray)}
+.c-blue{background:var(--n-blue-bg);color:var(--n-blue)} .c-pink{background:var(--n-pink-bg);color:var(--n-pink)}
+.c-green{background:var(--n-green-bg);color:var(--n-green)}
+.f-red{background:var(--n-red-bg);color:var(--n-red)} .f-orange{background:var(--n-orange-bg);color:var(--n-orange)} .f-yellow{background:var(--n-yellow-bg);color:var(--n-yellow)} .f-brown{background:var(--n-brown-bg);color:var(--n-brown)}
+.f-purple{background:var(--n-purple-bg);color:var(--n-purple)} .f-gray,.f-default{background:var(--n-gray-bg);color:var(--n-gray)} .f-blue{background:var(--n-blue-bg);color:var(--n-blue)} .f-pink{background:var(--n-pink-bg);color:var(--n-pink)} .f-green{background:var(--n-green-bg);color:var(--n-green)}
+.legend i.f-red{background:var(--n-red)} .legend i.f-orange{background:var(--n-orange)} .legend i.f-yellow{background:var(--n-yellow)} .legend i.f-brown{background:var(--n-brown)} .legend i.f-purple{background:var(--n-purple)} .legend i.f-gray,.legend i.f-default{background:var(--n-gray)} .legend i.f-blue{background:var(--n-blue)} .legend i.f-pink{background:var(--n-pink)} .legend i.f-green{background:var(--n-green)}
+
+.card{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:11px 12px;display:flex;flex-direction:column;gap:7px;cursor:grab;box-shadow:var(--shadow);text-align:left;width:100%}
+.card:hover{border-color:var(--pink-strong)}
+.card.dragging{opacity:.45}
+.card.flash{animation:flash 1.2s}
+@keyframes flash{0%{background:var(--pink)}100%{background:var(--surface)}}
+.card .t{font-weight:600;font-size:13.5px;line-height:1.3}
+.card .meta{display:flex;flex-wrap:wrap;gap:5px;align-items:center}
+.card .ns{font-size:12.5px;color:var(--muted);display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.src{font-size:10.5px;font-weight:600;border-radius:999px;padding:1px 7px;white-space:nowrap}
+.card .foot .src + span{margin-left:auto}
+.mail{display:flex;flex-direction:column;gap:8px;border-top:1px solid var(--line);padding-top:12px}
+.mail h3{font-family:var(--font-display);font-size:16px;font-weight:600;margin:0;display:flex;align-items:baseline;gap:8px}
+.mail h3 small{font-family:var(--font-body);font-size:12px;font-weight:400;color:var(--muted)}
+.mail .intro{font-size:12px;color:var(--muted);margin:0}
+.pg{font-size:13px;line-height:1.55;overflow-wrap:anywhere;background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:10px 12px}
+.pg hr{border:0;border-top:1px solid var(--line);margin:10px 0}
+.tbl{overflow-x:auto;margin:0 0 8px}
+.tbl table{border-collapse:collapse;font-size:12.5px;min-width:100%}
+.tbl th,.tbl td{border:1px solid var(--line);padding:5px 8px;text-align:left;vertical-align:top}
+.tbl th{background:var(--surface-2);font-weight:600}
+.pg h4{font-family:var(--font-display);font-size:14px;font-weight:600;margin:10px 0 4px}
+.pg h4:first-child{margin-top:0}
+.pg p{margin:0 0 8px}
+.pg ul,.pg ol{margin:0 0 8px;padding-left:20px}
+.pg li.chk{list-style:none;margin-left:-16px}
+.pg blockquote,.msg blockquote{margin:0 0 8px;padding-left:10px;border-left:3px solid var(--line);color:var(--muted)}
+.msg .mb h4{font-size:13px;margin:6px 0 4px}
+.msg{border:1px solid var(--line);border-radius:10px;background:var(--surface)}
+.msg.me{background:var(--accent-soft);border-color:transparent}
+.msg summary{list-style:none;cursor:pointer;display:flex;justify-content:space-between;gap:10px;padding:9px 12px;font-size:13px}
+.msg summary::-webkit-details-marker{display:none}
+.msg summary b{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+.msg summary span{color:var(--muted);font-size:11.5px;white-space:nowrap;flex:none}
+.msg .mb{padding:0 12px 12px;font-size:13px;line-height:1.5;overflow-wrap:anywhere}
+.msg .mb p{margin:0 0 8px}
+.msg .mb ul{margin:0 0 8px;padding-left:18px}
+.msg .mb .subj{color:var(--muted);font-size:12px}
+.card .foot{display:flex;justify-content:space-between;gap:6px;font-size:11.5px;color:var(--muted);align-items:center;flex-wrap:wrap}
+.due{font-size:11.5px;font-weight:600;border-radius:999px;padding:1px 8px;font-variant-numeric:tabular-nums}
+.due.over{background:var(--n-red-bg);color:var(--crit)} .due.soon{background:var(--lime);color:var(--n-yellow)} .due.later{background:var(--surface-2);color:var(--muted)}
+.plat{font-size:11px;color:var(--muted);border:1px solid var(--line);border-radius:999px;padding:0 7px}
+.stale{color:var(--warn);font-weight:600}
+.stub{font-style:italic}
+
+.scrim{position:fixed;inset:0;background:rgba(20,30,20,.35);z-index:20}
+aside.drawer{position:fixed;top:0;right:0;bottom:0;width:min(440px,100%);background:var(--surface);z-index:21;border-left:1px solid var(--line);display:flex;flex-direction:column;
+  padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px);padding-right:env(safe-area-inset-right,0px);box-shadow:-10px 0 30px rgba(0,0,0,.12)}
+.dr-h{display:flex;align-items:flex-start;gap:10px;padding:18px 20px 12px;border-bottom:1px solid var(--line)}
+.dr-h h2{font-family:var(--font-display);font-size:21px;font-weight:600;margin:0;line-height:1.2;text-wrap:balance}
+.dr-h .x{margin-left:auto;border:0;background:none;font-size:20px;cursor:pointer;color:var(--muted);line-height:1;padding:2px 6px;border-radius:6px}
+.dr-h .x:hover{background:var(--surface-2)}
+.dr-b{padding:14px 20px 24px;overflow-y:auto;display:flex;flex-direction:column;gap:14px}
+.field{display:flex;flex-direction:column;gap:5px}
+.field label,.field .lab{font-size:11.5px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);font-weight:600;display:flex;justify-content:space-between;gap:8px}
+.field label .np{font-family:var(--font-mono);text-transform:none;letter-spacing:0;font-weight:400;color:var(--pink-strong)}
+.field select,.field input,.field textarea{border:1px solid var(--line);background:var(--bg);border-radius:9px;padding:7px 9px;font-size:13.5px;width:100%}
+.field textarea{min-height:110px;resize:vertical}
+.field .ro{font-size:13.5px}
+.two{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+@media (max-width:420px){.two{grid-template-columns:1fr}}
+.note{font-size:12.5px;color:var(--muted);background:var(--surface-2);border-radius:10px;padding:10px 12px;margin:0}
+.dr-b a{color:var(--forest);font-weight:600}
+
+.log{display:flex;flex-direction:column;gap:8px}
+.log-item{border:1px solid var(--line);border-radius:10px;padding:9px 11px;display:flex;flex-direction:column;gap:5px}
+.log-item .r1{display:flex;gap:8px;align-items:center;justify-content:space-between;font-size:12px;color:var(--muted)}
+.log-item .what{font-size:13px}
+.log-item code{font-family:var(--font-mono);font-size:11.5px;background:var(--surface-2);border-radius:6px;padding:6px 8px;display:block;white-space:pre-wrap;word-break:break-all;color:var(--ink)}
+.st{font-size:11px;font-weight:600;border-radius:999px;padding:1px 7px}
+.st.queued{background:var(--lime);color:var(--n-yellow)} .st.writing{background:var(--n-blue-bg);color:var(--n-blue)} .st.synced{background:var(--n-green-bg);color:var(--n-green)} .st.pulled{background:var(--pink);color:var(--n-pink)}
+
+.toast{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(18px + env(safe-area-inset-bottom,0px));background:var(--forest);color:var(--forest-ink);border-radius:12px;padding:10px 14px;font-size:13px;z-index:30;display:flex;gap:14px;align-items:center;max-width:calc(100% - 32px);box-shadow:var(--shadow)}
+.toast button{background:none;border:0;color:var(--pink);font-weight:600;cursor:pointer;text-decoration:underline}
+
+.cal{gap:10px}
+.cal-h{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap}
+.cal h2{font-family:var(--font-display);font-size:18px;margin:0;font-weight:600}
+.cal-nav{display:flex;align-items:center;gap:6px}
+.cal-m{font-family:var(--font-display);font-size:15px;font-weight:600;min-width:128px;text-align:center}
+.cal-arrow{border:1px solid var(--line);background:var(--surface);border-radius:8px;width:30px;height:30px;font-size:17px;line-height:1;cursor:pointer;color:var(--ink)}
+.cal-arrow:hover{border-color:var(--accent)}
+.cal-sub{margin:0;font-size:12.5px;color:var(--muted)}
+.cal-grid{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));border:1px solid var(--line);border-radius:12px;overflow:hidden;background:var(--line);gap:1px}
+.cal-dow{background:var(--surface-2);font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);font-weight:600;padding:7px 8px}
+.cal-dow.we{color:var(--pink-strong)}
+.cal-day{background:var(--surface);min-height:96px;padding:6px;display:flex;flex-direction:column;gap:4px;min-width:0}
+.cal-day.out{background:var(--bg)}
+.cal-day.out .cal-d{opacity:.45}
+.cal-d{font-size:12px;font-weight:600;color:var(--muted);font-variant-numeric:tabular-nums;align-self:flex-start;padding:1px 6px;border-radius:999px}
+.cal-day.today .cal-d{background:var(--forest);color:var(--forest-ink)}
+.cal-ev{display:block;width:100%;text-align:left;border:0;border-radius:6px;padding:3px 6px;font-size:11.5px;font-weight:500;line-height:1.3;cursor:pointer;overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow-wrap:anywhere;border-left:3px solid currentColor}
+.cal-ev:hover{filter:brightness(.96);outline:1px solid currentColor}
+.cal-ev.over{box-shadow:inset 0 0 0 1px var(--crit)}
+.cal-ev.over::before{content:"⚑ ";color:var(--crit)}
+@media (max-width:700px){.cal-day{min-height:64px;padding:4px}.cal-ev{font-size:10.5px;padding:2px 4px}.cal-dow{padding:6px 4px;font-size:10px;letter-spacing:.02em}.cal-m{min-width:104px}}
+.how{display:grid;grid-template-columns:minmax(0,1.2fr) minmax(0,1fr);gap:16px}
+@media (max-width:1000px){.how{grid-template-columns:minmax(0,1fr)}}
+.steps{display:flex;flex-direction:column;margin:0;padding:0;list-style:none;counter-reset:s}
+.steps li{display:grid;grid-template-columns:28px 1fr;gap:10px;padding:8px 0;counter-increment:s;position:relative}
+.steps li::before{content:counter(s);width:24px;height:24px;border-radius:50%;background:var(--pink);color:var(--forest);font-weight:700;font-size:12px;display:grid;place-items:center}
+.steps li:not(:last-child)::after{content:"";position:absolute;left:11.5px;top:34px;bottom:-6px;width:1px;background:var(--line)}
+.steps b{display:block;font-size:13.5px}
+.steps span{font-size:12.5px;color:var(--muted)}
+.tbl-wrap{overflow-x:auto}
+table{border-collapse:collapse;width:100%;font-size:12.5px}
+th,td{text-align:left;padding:8px;border-bottom:1px solid var(--line);vertical-align:top}
+th{font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);font-weight:600}
+td code{font-family:var(--font-mono);font-size:11.5px}
+
+@media (max-width:899px){
+  .app{grid-template-columns:minmax(0,1fr)}
+  .side{position:static;height:auto;flex-direction:row;flex-wrap:wrap;align-items:center;gap:10px 14px;padding:12px max(16px,env(safe-area-inset-right,0px)) 12px max(16px,env(safe-area-inset-left,0px))}
+  .nav-sec{flex-direction:row;flex-wrap:wrap;gap:4px}
+  .nav-sec h4{display:none}
+  .nav-btn{width:auto}
+  .col{max-height:none}
+}
+@media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+</style>
+
+<div class="app">
+<nav class="side" aria-label="Main">
+  <div class="logo"><span class="mark">CP</span><div><b>Collab Pipeline</b><span>💌 Collab Tracker – Mag</span></div><button type="button" class="side-x" id="sideClose" aria-label="Close sidebar" title="Close sidebar">«</button></div>
+  <div class="nav-sec">
+    <h4>Pipeline</h4>
+    <button type="button" class="nav-btn" id="navStatus" aria-expanded="true" aria-controls="subStatus"><span class="ic">▦</span>Deal board<span class="chev" aria-hidden="true">▾</span></button>
+    <div class="subnav" id="subStatus"></div>
+    <button type="button" class="nav-btn" id="navArchive" aria-expanded="false" aria-controls="subArchive"><span class="ic">▤</span>Archive<span class="n" id="nArchive"></span><span class="chev" aria-hidden="true">▾</span></button>
+    <div class="subnav" id="subArchive"></div>
+    <button type="button" class="nav-btn" id="openLog"><span class="ic">↻</span>Notion writes<span class="badge" id="qBadge" data-n="0" style="margin-left:auto">0</span></button>
+  </div>
+</nav>
+
+<div class="main-col">
+<header class="top">
+  <div class="top-in gutter">
+    <button type="button" class="menu-btn" id="sideOpen" aria-label="Open sidebar" title="Open sidebar" hidden>☰</button>
+    <label class="search"><span aria-hidden="true">⌕</span><input type="search" id="q" placeholder="Search brand, agency, product…" aria-label="Search"></label>
+    <div class="top-right">
+      <button type="button" class="pill" id="connPill" title="Refresh from Notion"><span class="dot busy"></span>Connecting to Notion…</button>
+      <span class="avatar" aria-hidden="true">Y</span>
+    </div>
+  </div>
+</header>
+
+<main class="gutter">
+  <div class="hello-row">
+    <div class="hello">
+      <h1 id="helloTitle">Good morning</h1>
+      <p id="helloSub">Your collabs, live from your Notion Collab Tracker.</p>
+    </div>
+  </div>
+
+  <div class="banner" id="banner" hidden></div>
+
+  <section class="kpis" id="kpis" aria-label="Summary"></section>
+
+  
+
+  <div class="btabs" role="tablist" aria-label="Deal type">
+    <button type="button" role="tab" id="tabLive" data-board="live">◉ Livestreams <span class="n" id="nLive"></span></button>
+    <button type="button" role="tab" id="tabUgc" data-board="ugc">▶ UGC Videos <span class="n" id="nUgc"></span></button>
+  </div>
+  <div class="board-h">
+    <h2 id="boardTitle">Deal board</h2>
+    <section class="controls" aria-label="Board controls">
+      <details class="ms" id="fType"><summary aria-label="Filter by deal type"><span class="ms-l">All deal types</span><span class="ms-c" aria-hidden="true">▾</span></summary><div class="ms-pop" role="group" aria-label="Deal types"></div></details>
+      <details class="ms" id="fPlat"><summary aria-label="Filter by platform"><span class="ms-l">All platforms</span><span class="ms-c" aria-hidden="true">▾</span></summary><div class="ms-pop" role="group" aria-label="Platforms"></div></details>
+      <details class="ms" id="fSrc"><summary aria-label="Filter by source"><span class="ms-l">All sources</span><span class="ms-c" aria-hidden="true">▾</span></summary><div class="ms-pop" role="group" aria-label="Sources"></div></details>
+      <select id="fSort" aria-label="Sort cards by"><option value="last">Sort: Last activity</option><option value="deadline">Sort: Deadline</option><option value="edited">Sort: Last edited</option><option value="brand">Sort: Brand A–Z</option></select>
+      <label class="chk"><input type="checkbox" id="fStub"> Hide empty rows</label>
+    </section>
+  </div>
+
+<div class="load-panel" id="loadPanel" role="status"></div>
+<div class="board-wrap"><div class="board" id="board"></div></div>
+
+  <section class="panel cal" id="cal" aria-labelledby="calTitle">
+    <div class="cal-h">
+      <h2 id="calTitle">Deadlines</h2>
+      <div class="cal-nav">
+        <button type="button" class="btn" id="calToday">Today</button>
+        <button type="button" class="cal-arrow" id="calPrev" aria-label="Previous month">‹</button>
+        <span class="cal-m" id="calMonth" aria-live="polite"></span>
+        <button type="button" class="cal-arrow" id="calNext" aria-label="Next month">›</button>
+      </div>
+    </div>
+    <p class="cal-sub" id="calSub"></p>
+    <div class="cal-grid" id="calGrid"></div>
+  </section>
+
+  <section class="how" aria-label="How sync works">
+    <div class="panel">
+      <h2>How the data moves</h2>
+      <ol class="steps">
+        <li><div><b>Daily cron, 06:00 SGT (not set up yet)</b><span>A scheduled job will read new Gmail threads, WhatsApp groups and Instagram DMs since the last run.</span></div></li>
+        <li><div><b>Extract and match</b><span>Each conversation becomes a deal. It matches existing rows by Gmail Thread URL, then by Brand + Agency, so reruns update instead of duplicating.</span></div></li>
+        <li><div><b>Upsert into Notion</b><span>Fills Status, Next Step, Deadline, Fee and Last Activity. Notion stays the single source of truth.</span></div></li>
+        <li><div><b>This board reads Notion</b><span>On load and when you press Refresh, it reads every row through your Notion connector, so edits made in Notion show up here.</span></div></li>
+        <li><div><b>Your edits write back</b><span>Dragging a card or editing a field sends a property update to that Notion page straight away and stamps Last Activity.</span></div></li>
+      </ol>
+    </div>
+    <div class="panel">
+      <h2>What each action changes in Notion</h2>
+      <div class="tbl-wrap"><table>
+        <thead><tr><th>On this board</th><th>Notion property</th></tr></thead>
+        <tbody>
+          <tr><td>Drag a card to another column</td><td><code>Status</code> + <code>Last Activity</code></td></tr>
+          <tr><td>Edit deadline, fee, next step, deal type, status</td><td>Same-named property + <code>Last Activity</code></td></tr>
+          <tr><td>Columns and their order</td><td>Options of the <code>Status</code> select</td></tr>
+          <tr><td>Refresh from Notion</td><td>Reads only, changes nothing</td></tr>
+        </tbody>
+      </table></div>
+      <p class="note">Changes save to Notion right away through your Notion connector, as you. Each save is listed under “Notion writes” in the sidebar.</p>
+    </div>
+  </section>
+</main>
+</div>
+</div>
+
+<div class="scrim" id="scrim" hidden></div>
+<aside class="drawer" id="drawer" hidden aria-modal="true" role="dialog" aria-labelledby="drTitle">
+  <div class="dr-h"><h2 id="drTitle"></h2><button class="x" id="drClose" type="button" aria-label="Close">×</button></div>
+  <div class="dr-b" id="drBody"></div>
+</aside>
+<div class="toast" id="toast" hidden role="status"><span id="toastMsg"></span><button type="button" id="toastUndo">Undo</button></div>
+
+<script>
+const NOTION = 'Notion';
+const DS = 'collection://8206590b-d48c-825b-ac32-07e2152ec3e1';
+const SQL = `SELECT url, "Brand", "Status", "Deal Type", "Agency / Platform", "Platforms", "Fee", "Next Step", "date:Deadline:start" AS deadline, "date:Deadline:end" AS deadline_end, "date:Last Activity:start" AS last, "Last Edited" AS edited, "Gmail Thread" AS gmail FROM "${DS}"`;
+const todayISO = () => new Date().toLocaleDateString('en-CA');
+const TODAY = new Date(todayISO()+'T00:00:00');
+
+const STATUSES = [
+  {k:'Backlog',c:'brown',ph:'Inbound'},
+  {k:'New - not replied',c:'red',ph:'Inbound'},
+  {k:'Action needed',c:'orange',ph:'Inbound'},
+  {k:'Awaiting brand',c:'yellow',ph:'Inbound'},
+  {k:'Ideas/Scripting',c:'purple',ph:'Production'},
+  {k:'Filming',c:'default',ph:'Production'},
+  {k:'Editing',c:'blue',ph:'Production'},
+  {k:'Draft sent/Scheduled',c:'orange',ph:'Production'},
+  {k:'Completed - payment pending',c:'pink',ph:'Wrap-up'},
+  {k:'Completed',c:'green',ph:'Archive'},
+  {k:'Missed/Not Interested',c:'gray',ph:'Archive'},
+];
+const PHASES = ['Inbound','Production','Wrap-up'];
+const TYPES = {'Scam':'yellow','Paid':'green','Gifted':'blue','TikTok Shop affiliate':'orange','UGC':'purple','Livestream':'pink','Other':'gray'};
+const CLOSED = new Set(['Completed','Missed/Not Interested']);
+const PROPS = {status:'Status',type:'Deal Type',deadline:'Deadline',dl:'Deadline',fee:'Fee',next:'Next Step'};
+
+let rows = [];
+let mcp = null;
+let load = {state:'loading', msg:'', code:'', at:null};
+const state = {stage:'', q:'', type:new Set(), plat:new Set(), src:new Set(), hideStub:false, sort:'last', board:'ugc', kpi:'', collapsed:new Set(), calMonth:new Date(TODAY.getFullYear(),TODAY.getMonth(),1), log:[], undo:null, sideClosed:false, dealOpen:true, archOpen:false};
+try{ const s=JSON.parse(localStorage.getItem('cp-view')||'{}'); state.sideClosed=!!s.sideClosed; if(s.dealOpen===false) state.dealOpen=false; if(s.archOpen) state.archOpen=true; if(s.collapsed) state.collapsed=new Set(s.collapsed.filter(k=>!CLOSED.has(k))); if(s.hideStub) state.hideStub=true; if(['last','deadline','edited','brand'].includes(s.sort)) state.sort=s.sort; if(s.board==='live') state.board='live'; }catch(e){}
+function saveView(){ try{ localStorage.setItem('cp-view',JSON.stringify({collapsed:[...state.collapsed],hideStub:state.hideStub,sort:state.sort,board:state.board,sideClosed:state.sideClosed,dealOpen:state.dealOpen,archOpen:state.archOpen})); }catch(e){} }
+
+const $ = s=>document.querySelector(s);
+const esc = s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const days = iso=>Math.round((new Date(iso+'T00:00:00')-TODAY)/864e5);
+const fmt = iso=>new Date(iso+'T00:00:00').toLocaleDateString('en-SG',{day:'numeric',month:'short'});
+const clock = d=>d.toLocaleTimeString('en-SG',{hour:'2-digit',minute:'2-digit'});
+const SRC_C={Email:'blue',Instagram:'pink',WhatsApp:'green',Unknown:'gray'};
+const SRC_I={Email:'✉',Instagram:'◎',WhatsApp:'☏',Unknown:'?'};
+const isStub = r=>!r.last && !r.next;
+const isOverdue = r=>r.deadline && days(r.deadline)<0 && !CLOSED.has(r.status);
+const isSoon = r=>r.deadline && days(r.deadline)>=0 && days(r.deadline)<=7 && !CLOSED.has(r.status);
+const sinceEdit = r=>r.edited ? (Date.now()-new Date(r.edited).getTime()) : null;
+const isStale = r=>r.edited && !CLOSED.has(r.status) && r.status!=='Completed - payment pending' && sinceEdit(r) >= 14*864e5;
+const ago = r=>{ const ms=sinceEdit(r); if(ms==null||isNaN(ms)) return ''; const m=Math.floor(ms/6e4);
+  if(m<1) return 'just now'; if(m<60) return m+'m ago'; const h=Math.floor(m/60); if(h<24) return h+'h ago'; return Math.floor(h/24)+'d ago'; };
+const ready = ()=>load.state==='ready';
+
+const KPIS = [
+  {k:'new',i:'✉',l:'Need a first reply',f:r=>r.status==='New - not replied',s:'Status: New – not replied'},
+  {k:'action',i:'!',l:'Action needed',f:r=>r.status==='Action needed',s:'You owe the brand something'},
+  {k:'overdue',i:'⏱',l:'Overdue',f:isOverdue,s:'Deadline passed, still open',cls:'crit'},
+  {k:'soon',i:'◷',l:'Due in 7 days',f:isSoon,s:'Within the next week',cls:'warn'},
+  {k:'stale',i:'…',l:'Gone quiet',f:isStale,s:'Not edited for 14+ days'},
+  {k:'pay',i:'$',l:'Payment pending',f:r=>r.status==='Completed - payment pending',s:'Delivered, not yet paid'},
+];
+
+/* ---------- Notion: read ---------- */
+function errInfo(e){
+  const code = e && e.code || 'upstream_error';
+  const map = {
+    needs_reauth:'Your Notion connection has expired. Reconnect Notion in claude.ai Settings → Connectors, then reload.',
+    server_not_connected:'Notion isn’t connected to your Claude account. Add the Notion connector in claude.ai Settings → Connectors, then reload.',
+    selection_required:'You have more than one Notion connection. Pick one when claude.ai asks, then try again.',
+    not_in_manifest:'This page doesn’t have permission to use your Notion connector. Allow it, then try again.',
+    approval_required:'This page needs your approval to use Notion. Click below and allow it when claude.ai asks.',
+    blocked_by_policy:'Your organization’s policy blocks this Notion action for your account.',
+    server_unavailable:'Notion didn’t respond in time.',
+    tool_error:'Notion returned an error: '+((e&&e.message)||'unknown error'),
+  };
+  return {code, msg: map[code] || ('Something went wrong talking to Notion ('+code+').')};
+}
+function parsePayload(res){
+  let p = res && res.payload;
+  if(typeof p==='string'){ try{ p=JSON.parse(p); }catch(_){ } }
+  return p;
+}
+const sgParts=v=>{ if(!v) return {d:'',t:''}; v=String(v); if(!/T\d/.test(v)) return {d:v.slice(0,10),t:''};
+  const dt=new Date(v); if(isNaN(dt)) return {d:v.slice(0,10),t:''};
+  return {d:dt.toLocaleDateString('en-CA',{timeZone:'Asia/Singapore'}), t:dt.toLocaleTimeString('en-GB',{timeZone:'Asia/Singapore',hour:'2-digit',minute:'2-digit',hour12:false})}; };
+function dlFrom(start,end){ const a=sgParts(start), b=sgParts(end); return a.d?`${a.d}|${a.t}|${a.t?b.t:''}`:''; }
+function applyDl(r){ const [d='',t='',e='']=(r.dl||'').split('|'); r.deadline=d; r.tStart=t; r.tEnd=e; return r; }
+const t12=t=>{ if(!t) return ''; let [h,m]=t.split(':').map(Number); const ap=h>=12?'pm':'am'; h=h%12||12; return m?`${h}:${String(m).padStart(2,'0')}${ap}`:`${h}${ap}`; };
+const fmtDay=d=>new Date(d+'T00:00:00').toLocaleDateString('en-SG',{weekday:'short',day:'numeric',month:'short'});
+function streamLabel(r){ return r.deadline ? `${fmtDay(r.deadline)}${r.tStart?` · ${t12(r.tStart)}${r.tEnd?'–'+t12(r.tEnd):''}`:''}` : ''; }
+function toRow(x){
+  const m = String(x.url||'').match(/([0-9a-f]{32})\s*$/i);
+  let plats=[]; try{ plats = x.Platforms ? JSON.parse(x.Platforms) : []; }catch(_){ plats=[]; }
+  return {id:m?m[1]:String(x.url||''), url:x.url, brand:x.Brand||'Untitled', status:x.Status||'', type:x['Deal Type']||'', agency:x['Agency / Platform']||'',
+    platforms:Array.isArray(plats)?plats:[], fee:x.Fee||'', next:x['Next Step']||'', deadline:'', dl:dlFrom(x.deadline,x.deadline_end), last:(x.last||'').slice(0,10), edited:x.edited?String(x.edited).replace(' ','T'):'', gmail:x.gmail||''};
+}
+function srcOf(r){ if(r.gmail) return 'Email'; if(/whatsapp/i.test(r.agency)) return 'WhatsApp'; if(/instagram/i.test(r.agency)) return 'Instagram'; return 'Unknown'; }
+function withSrc(r){ applyDl(r); r.source=srcOf(r); r.live=isLive(r); return r;
+}
+const VIEW_URL='https://app.notion.com/p/41f6590bd48c809da4bbf8969aa372bd?v=48e6590bd48c836e82af8832cd48769c';
+const unmd = v => typeof v==='string' ? v.replace(/\[([^\]]+)\]\((?:https?:|mailto:)[^)\s]+\)/g,'$1').replace(/<\/?[a-z][^>]*>/gi,'').replace(/\\([\\`*_{}\[\]()#+\-.!$|~<>])/g,'$1') : v;
+async function fetchViaView(){
+  // View mode reads the saved "Deal board" view; it doesn't use the hourly SQL query allowance.
+  const out=[]; let cursor=null;
+  for(let i=0;i<20;i++){
+    const data={mode:'view', view_url:VIEW_URL, page_size:100}; if(cursor) data.start_cursor=cursor;
+    const p=parsePayload(await mcp.callTool(NOTION,'notion-query-data-sources',{data},{cache:false}));
+    if(!p || !Array.isArray(p.results)) throw {code:'tool_error', message:'The Notion response didn’t include any rows.'};
+    p.results.forEach(x=>out.push({url:x.url, Brand:unmd(x.Brand), Status:x.Status, 'Deal Type':x['Deal Type'], 'Agency / Platform':unmd(x['Agency / Platform']),
+      Platforms:x.Platforms, Fee:unmd(x.Fee), 'Next Step':unmd(x['Next Step']), deadline:x['date:Deadline:start'], deadline_end:x['date:Deadline:end'], last:x['date:Last Activity:start'],
+      edited:x['Last Edited'], gmail:x['Gmail Thread']}));
+    if(!p.has_more || !p.next_cursor) break; cursor=p.next_cursor;
+  }
+  return out;
+}
+async function loadRows(){
+  if(!mcp) return;
+  load = {...load, state: rows.length?'refreshing':'loading'}; paintChrome(); renderBoard();
+  try{
+    let raw;
+    try{ raw = await fetchViaView(); }
+    catch(viewErr){
+      // Fallback: SQL query (counts toward Notion's hourly query allowance on non-Business plans)
+      const res = await mcp.callTool(NOTION,'notion-query-data-sources',{data:{data_source_urls:[DS],query:SQL}},{cache:false});
+      const p = parsePayload(res);
+      if(!p || !Array.isArray(p.results)) throw viewErr;
+      raw = p.results;
+    }
+    rows = raw.map(x=>withSrc(toRow(x)));
+    load = {state:'ready', msg:'', code:'', at:new Date()};
+    if(state.log.length) state.log.unshift({t:new Date(),brand:'Refresh',prop:null,st:'pulled',msg:`Loaded ${rows.length} rows from Notion.`});
+  }catch(e){
+    const {code,msg} = errInfo(e);
+    load = {state: rows.length?'ready':'error', msg, code, at:load.at};
+    if(rows.length) toast(`Couldn’t refresh from Notion (${msg.replace(/\s*https?:\S+/g,'').slice(0,140)}). Showing the last loaded data.`);
+  }
+  render();
+}
+
+/* ---------- Notion: write ---------- */
+const queue=[]; let writing=false;
+function propsFor(e){
+  const p = {'date:Last Activity:start':e.day,'date:Last Activity:is_datetime':0};
+  if(e.prop==='status') p['Status']=e.to||null;
+  else if(e.prop==='type') p['Deal Type']=e.to||null;
+  else if(e.prop==='fee') p['Fee']=e.to;
+  else if(e.prop==='next') p['Next Step']=e.to;
+  else if(e.prop==='deadline'){ if(e.to){ p['date:Deadline:start']=e.to; p['date:Deadline:is_datetime']=0; } else p['Deadline']=null; }
+  else if(e.prop==='dl'){ const [d,t,en]=(e.to||'').split('|');
+    if(!d) p['Deadline']=null;
+    else if(!t){ p['date:Deadline:start']=d; p['date:Deadline:is_datetime']=0; }
+    else { p['date:Deadline:start']=`${d}T${t}:00+08:00`; p['date:Deadline:is_datetime']=1; if(en) p['date:Deadline:end']=`${d}T${en}:00+08:00`; } }
+  return p;
+}
+function setProp(r, prop, value, opts={}){
+  if(!ready() || !r) return;
+  const from = r[prop]??'';
+  if(from===value) return;
+  const e={t:new Date(), id:r.id, brand:r.brand, prop, from, to:value, prevLast:r.last, prevEdited:r.edited, day:todayISO(), st:'queued'};
+  r[prop]=value; if(prop==='dl') applyDl(r); r.last=e.day; r.edited=new Date().toISOString();
+  state.log.unshift(e); queue.push(e);
+  if(!opts.silent){ state.undo={r,prop,from}; toast(`${PROPS[prop]} → ${prop==='dl'?(streamLabel(r)||'empty'):(value||'empty')} · saving to Notion…`, true); }
+  render(); flashCard(r.id); pump();
+}
+async function pump(){
+  if(writing) return; writing=true;
+  while(queue.length){
+    const e=queue.shift(); e.st='writing'; paintChrome(); refreshLog();
+    try{
+      await mcp.callTool(NOTION,'notion-update-page',{page_id:e.id,command:'update_properties',properties:propsFor(e),allow_async:false},{cache:false});
+      e.st='synced';
+    }catch(err){
+      const {code,msg}=errInfo(err); e.err=msg;
+      const r=rows.find(x=>x.id===e.id);
+      if(['server_unavailable','upstream_error','cancelled'].includes(code)){
+        e.st='unknown';
+        toast(`Not sure the ${PROPS[e.prop]} change on ${e.brand} saved. Refresh to check.`);
+      } else {
+        e.st='failed';
+        if(r && r[e.prop]===e.to){ r[e.prop]=e.from; if(e.prop==='dl') applyDl(r); r.last=e.prevLast; r.edited=e.prevEdited; }
+        toast(`Couldn’t save ${PROPS[e.prop]} on ${e.brand}. Change undone.`);
+        render();
+      }
+    }
+    paintChrome(); refreshLog();
+  }
+  writing=false;
+}
+function payloadText(e){ return JSON.stringify({page_id:e.id, command:'update_properties', properties:propsFor(e)}, null, 1); }
+
+/* ---------- Render ---------- */
+function visible(){
+  const q=state.q.toLowerCase(); const kp=KPIS.find(k=>k.k===state.kpi);
+  return scoped().filter(r=>{
+    if(state.hideStub && isStub(r)) return false;
+    if(state.type.size && !state.type.has(r.type)) return false;
+    if(state.plat.size && !r.platforms.some(p=>state.plat.has(p))) return false;
+    if(state.src.size && !state.src.has(r.source)) return false;
+    if(kp && !kp.f(r)) return false;
+    if(q && !(r.brand+' '+r.agency+' '+r.next+' '+r.fee).toLowerCase().includes(q)) return false;
+    return true;
+  });
+}
+function renderKpis(){
+  $('#kpis').innerHTML = KPIS.map(k=>{
+    const n=ready()?scoped().filter(k.f).length:'–';
+    return `<button type="button" class="kpi ${k.cls||''} ${state.kpi===k.k?'on':''}" data-k="${k.k}" aria-pressed="${state.kpi===k.k}"><span class="ico" aria-hidden="true">${k.i}</span><span class="l">${k.l}</span><span class="v">${n}</span><span class="s">${k.s}</span></button>`;
+  }).join('');
+}
+const ARCH='@archive';
+function isLive(r){ return r.type==='Livestream' || r.platforms.includes('Live') || /\blive\b|livestream|\bstreams?\b/i.test(r.brand+' '+r.agency); }
+const LIVE_GROUPS=[
+  {k:'New - not replied',c:'red',ph:'Inbound'},{k:'Action needed',c:'orange',ph:'Inbound'},{k:'Awaiting brand',c:'yellow',ph:'Inbound'},
+  {k:'Backlog',label:'Stream booked',c:'blue',ph:'Scheduled',keys:['Backlog','Ideas/Scripting','Filming','Editing','Draft sent/Scheduled']},
+  {k:'Completed - payment pending',label:'Streamed – payment pending',c:'pink',ph:'Wrap-up'},
+  {k:'Completed',label:'Streamed',c:'green',ph:'Archive'},{k:'Missed/Not Interested',c:'gray',ph:'Archive'}];
+const groups=()=>state.board==='live'?LIVE_GROUPS:STATUSES;
+const phases=()=>state.board==='live'?['Inbound','Scheduled','Wrap-up']:PHASES;
+const inG=(g,r)=>(g.keys||[g.k]).includes(r.status);
+const inTab=r=>state.board==='live'?r.live:!r.live;
+const scoped=()=>rows.filter(inTab);
+const isArchStage = st=>st===ARCH || CLOSED.has(st);
+function subBtn(g){ const n=scoped().filter(r=>inG(g,r)).length; const c=g.c==='default'?'gray':g.c;
+  return `<button type="button" class="sub-btn ${n?'':'zero'}" data-stage="${esc(g.k)}" aria-current="${state.stage===g.k}"><i style="background:var(--n-${c})"></i>${esc(g.label||g.k)}<span class="n">${ready()?n:''}</span></button>`; }
+function renderSubnav(){
+  const sc=scoped(); const open=sc.filter(r=>!CLOSED.has(r.status)).length, arch=sc.length-open;
+  let out=`<button type="button" class="sub-btn" data-stage="" aria-current="${state.stage===''}">All collabs<span class="n">${ready()?open:''}</span></button>`, ph='';
+  groups().filter(g=>g.ph!=='Archive').forEach(g=>{ if(g.ph!==ph){ ph=g.ph; out+=`<div class="sub-ph">${ph}</div>`; } out+=subBtn(g); });
+  $('#subStatus').innerHTML = out;
+  $('#subStatus').hidden = !state.dealOpen;
+  $('#navStatus').setAttribute('aria-expanded', String(state.dealOpen));
+  $('#subArchive').innerHTML = `<button type="button" class="sub-btn" data-stage="${ARCH}" aria-current="${state.stage===ARCH}">All archived<span class="n">${ready()?arch:''}</span></button>` + groups().filter(g=>g.ph==='Archive').map(subBtn).join('');
+  $('#subArchive').hidden = !state.archOpen;
+  $('#navArchive').setAttribute('aria-expanded', String(state.archOpen));
+  $('#navStatus').setAttribute('aria-current', String(!isArchStage(state.stage)));
+  $('#navArchive').setAttribute('aria-current', String(isArchStage(state.stage)));
+  $('#nArchive').textContent = ready()?arch:'';
+  $('#boardTitle').textContent = state.stage==='' ? 'Deal board' : state.stage===ARCH ? 'Archive' : (groups().find(x=>x.k===state.stage)?.label || state.stage);
+  const nL=rows.filter(r=>r.live&&!CLOSED.has(r.status)).length, nU=rows.filter(r=>!r.live&&!CLOSED.has(r.status)).length;
+  $('#nLive').textContent=ready()?nL:''; $('#nUgc').textContent=ready()?nU:'';
+  $('#tabLive').setAttribute('aria-selected',String(state.board==='live')); $('#tabUgc').setAttribute('aria-selected',String(state.board!=='live'));
+}
+function cardHtml(r){
+  let due='';
+  if(r.deadline){ const d=days(r.deadline); const cls=CLOSED.has(r.status)?'later':d<0?'over':d<=7?'soon':'later';
+    const lbl = CLOSED.has(r.status)?fmt(r.deadline):d<0?`${-d}d overdue`:d===0?'Due today':`Due ${fmt(r.deadline)}`; due=`<span class="due ${cls}">${lbl}</span>`; }
+  const stream = r.live && r.deadline ? `<div class="when ${!CLOSED.has(r.status)&&days(r.deadline)<0?'past':''}">◷ ${esc(streamLabel(r))}</div>` : '';
+  if(stream) due='';
+  const type = r.type?`<span class="chip c-${TYPES[r.type]||'gray'}">${esc(r.type)}</span>`:'';
+  const plats = r.platforms.map(p=>`<span class="plat">${esc(p)}</span>`).join('');
+  const last = r.edited ? `Last edited ${ago(r)}` : 'Not edited yet';
+  return `<div class="card" draggable="true" data-id="${esc(r.id)}" tabindex="0" role="button" aria-label="${esc(r.brand)}">
+    ${stream}<div class="t">${esc(r.brand)}</div>
+    ${(type||plats||due)?`<div class="meta">${type}${plats}${due}</div>`:''}
+    ${r.next?`<div class="ns">${esc(r.next)}</div>`:`<div class="ns stub">Empty row. Add details here or in Notion.</div>`}
+    <div class="foot"><span class="src" style="color:var(--n-${SRC_C[r.source]||'gray'});background:var(--n-${SRC_C[r.source]||'gray'}-bg)" title="Came in via ${esc(r.source)}">${SRC_I[r.source]||''} ${esc(r.source)}</span><span class="${isStale(r)?'stale':''}">${isStale(r)?'Gone quiet · ':''}${last}</span></div>
+  </div>`;
+}
+function renderStatusPanel(){
+  const p=$('#loadPanel');
+  if(load.state==='loading'){ p.hidden=false; p.innerHTML=`<b>Loading your deals from Notion…</b><span>The first time, claude.ai may ask you to allow this page to use your Notion connector.</span>`; return; }
+  if(load.state==='nomcp'){ p.hidden=false; p.innerHTML=`<b>Open this page on claude.ai to see your deals</b><span>It reads and writes your Notion Collab Tracker through your Notion connector, which only works inside claude.ai.</span>`; return; }
+  if(load.state==='error'){ p.hidden=false; p.innerHTML=`<b>Couldn’t load your deals</b><span>${esc(load.msg)}</span><div><button type="button" class="btn primary" id="retryLoad">${load.code==='approval_required'||load.code==='not_in_manifest'?'Allow Notion access':'Try again'}</button></div>`; $('#retryLoad').onclick=loadRows; return; }
+  p.hidden=true;
+}
+function renderBoard(){
+  renderStatusPanel();
+  if(!rows.length){ $('#board').innerHTML=''; renderCal(); return; }
+  const list = visible();
+  const byDesc=(x,y)=>(y||'').localeCompare(x||''); // newest first, empty last
+  const sortFn=(a,b)=>{
+    if(state.sort==='deadline'){ const ad=a.deadline&&!CLOSED.has(a.status)?a.deadline:'9999', bd=b.deadline&&!CLOSED.has(b.status)?b.deadline:'9999'; if(ad!==bd) return ad<bd?-1:1; return byDesc(a.last,b.last); }
+    if(state.sort==='edited') return byDesc(a.edited,b.edited);
+    if(state.sort==='brand') return a.brand.localeCompare(b.brand,undefined,{sensitivity:'base'});
+    return byDesc(a.last,b.last) || byDesc(a.edited,b.edited); };
+  const soloG = state.stage!=='' && state.stage!==ARCH ? groups().find(g=>g.k===state.stage) : null;
+  $('#board').classList.toggle('solo',!!soloG);
+  const shown = soloG ? [soloG.ph] : state.stage===ARCH ? ['Archive'] : phases();
+  $('#board').innerHTML = shown.map(ph=>{
+    let gs = groups().filter(g=>g.ph===ph); if(soloG) gs=[soloG];
+    const n = list.filter(r=>gs.some(g=>inG(g,r))).length;
+    return `<section class="phase"><div class="phase-h">${ph} · ${n}</div><div class="cols">${gs.map(g=>{
+      const items=list.filter(r=>inG(g,r)).sort(sortFn);
+      const col=!soloG && state.collapsed.has(g.k);
+      return `<div class="col ${col?'collapsed':''} ${soloG?'solo':''}" data-col="${esc(g.k)}" ${col?`title="Expand ${esc(g.label||g.k)}"`:''}>
+        <div class="col-h"><span class="chip c-${g.c}">${esc(g.label||g.k)}</span><span class="count">${items.length}</span><button type="button" class="collapse" data-collapse="${esc(g.k)}" aria-label="Collapse column">⟨⟩</button></div>
+        <div class="col-body">${items.length?items.map(cardHtml).join(''):'<div class="empty">Drop a card here</div>'}</div></div>`;
+    }).join('')}</div></section>`;
+  }).join('');
+  renderCal();
+}
+
+function renderBanner(){
+  const b=$('#banner');
+  if(!ready()){ b.hidden=true; return; }
+  b.hidden=false;
+  const sc=scoped(); const over=sc.filter(isOverdue).sort((a,b)=>a.deadline.localeCompare(b.deadline)), soon=sc.filter(isSoon), news=sc.filter(r=>r.status==='New - not replied');
+  const worst=over[0];
+  const head = over.length ? `${over.length} deal${over.length>1?'s are':' is'} overdue and ${soon.length} due this week` : `${soon.length} deal${soon.length===1?'':'s'} due this week`;
+  const sub = (worst ? `${worst.brand} is ${-days(worst.deadline)} day${-days(worst.deadline)===1?'':'s'} late. ` : '') + `${news.length} new inquir${news.length===1?'y is':'ies are'} waiting for a first reply.`;
+  b.innerHTML = `<span class="bi" aria-hidden="true">⚑</span><div class="bt"><b>${esc(head)}</b><span>${esc(sub)}</span></div><button type="button" class="btn" id="bannerBtn">${state.kpi==='overdue'?'Show all deals':'Show overdue'}</button>`;
+  $('#bannerBtn').onclick=()=>{ state.kpi = state.kpi==='overdue'?'':'overdue'; if(state.kpi){ state.collapsed.clear(); state.stage=''; } render(); };
+}
+function paintChrome(){
+  const pending=state.log.filter(e=>e.st==='queued'||e.st==='writing').length;
+  const bad=state.log.filter(e=>e.st==='failed'||e.st==='unknown').length;
+  const b=$('#qBadge'); b.textContent=pending+bad; b.dataset.n=pending+bad;
+  const busy = pending>0 || load.state==='loading' || load.state==='refreshing';
+  const pill=$('#connPill');
+  pill.disabled = !mcp || busy;
+  pill.innerHTML = pending ? `<span class="dot busy"></span>Saving ${pending} change${pending>1?'s':''} to Notion…`
+    : load.state==='loading'||load.state==='refreshing' ? '<span class="dot busy"></span>Loading from Notion…'
+    : load.state==='ready' ? `<span class="dot"></span>Live from Notion${load.at?` <span class="tm">· ${clock(load.at)}</span>`:''}<span class="rf" aria-hidden="true">↻</span>`
+    : '<span class="dot off"></span>Notion not connected';
+  pill.setAttribute('aria-label', pill.textContent.replace('↻','').trim()+(pill.disabled?'':'. Refresh from Notion'));
+  const h=new Date().getHours();
+  $('#helloTitle').textContent = h<12?'Good morning':h<18?'Good afternoon':'Good evening';
+  $('#helloSub').textContent = load.at ? `Here's how your collabs are moving, live from your Notion Collab Tracker (${rows.length} rows).` : 'Your collabs, live from your Notion Collab Tracker.';
+}
+function calRows(){
+  const sg=groups().find(g=>g.k===state.stage);
+  return visible().filter(r=>r.deadline && (state.stage==='' ? !CLOSED.has(r.status) : state.stage===ARCH ? CLOSED.has(r.status) : sg?inG(sg,r):r.status===state.stage));
+}
+function renderCal(){
+  const m=state.calMonth, y=m.getFullYear(), mo=m.getMonth();
+  $('#calMonth').textContent = m.toLocaleDateString('en-SG',{month:'long',year:'numeric'});
+  const iso = d=>`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+  const start=new Date(y,mo,1); start.setDate(1-((start.getDay()+6)%7));      // back to Monday
+  const end=new Date(y,mo+1,0); end.setDate(end.getDate()+(6-((end.getDay()+6)%7))); // forward to Sunday
+  const by={}; calRows().forEach(r=>{ (by[r.deadline]=by[r.deadline]||[]).push(r); });
+  const inMonth = Object.keys(by).filter(k=>k.slice(0,7)===iso(m).slice(0,7)).reduce((n,k)=>n+by[k].length,0);
+  $('#calSub').textContent = !ready() ? 'Deadlines appear once your deals load from Notion.'
+    : `${inMonth} deadline${inMonth===1?'':'s'} in ${m.toLocaleDateString('en-SG',{month:'long'})}${state.stage===ARCH?' (archived deals)':state.stage?` (${state.stage})`:''}. Click one to open it.`;
+  let out=['Mon','Tue','Wed','Thu','Fri','Sat','Sun'].map((d,i)=>`<div class="cal-dow ${i>4?'we':''}">${d}</div>`).join('');
+  for(const d=new Date(start); d<=end; d.setDate(d.getDate()+1)){
+    const k=iso(d), evs=(by[k]||[]).sort((a,b)=>(a.tStart||'99').localeCompare(b.tStart||'99')||a.brand.localeCompare(b.brand));
+    out+=`<div class="cal-day ${d.getMonth()!==mo?'out':''} ${k===todayISO()?'today':''}" aria-label="${d.toLocaleDateString('en-SG',{day:'numeric',month:'long'})}: ${evs.length} deadline${evs.length===1?'':'s'}"><span class="cal-d">${d.getDate()}</span>${evs.map(r=>{
+      const g=STATUSES.find(x=>x.k===r.status); const c=!g||g.c==='default'?'gray':g.c;
+      return `<button type="button" class="cal-ev ${isOverdue(r)?'over':''}" data-id="${esc(r.id)}" style="background:var(--n-${c}-bg);color:var(--n-${c})" title="${esc(r.brand)} · ${esc(r.status)}${r.tStart?' · '+esc(streamLabel(r)):''}${isOverdue(r)?' · overdue':''}">${r.tStart?`<b>${t12(r.tStart)}</b> `:''}${esc(r.brand)}</button>`; }).join('')}</div>`;
+  }
+  $('#calGrid').innerHTML=out;
+}
+function render(){ paintChrome(); renderBanner(); renderKpis(); renderSubnav(); renderBoard(); refreshLog(); }
+function flashCard(id){ requestAnimationFrame(()=>{ const c=document.querySelector(`.card[data-id="${CSS.escape(id)}"]`); if(c){ c.classList.add('flash'); setTimeout(()=>c.classList.remove('flash'),1200);} }); }
+
+let toastTimer=null;
+function toast(msg, undo){
+  $('#toastMsg').textContent=msg; $('#toastUndo').hidden=!undo; $('#toast').hidden=false;
+  clearTimeout(toastTimer); toastTimer=setTimeout(()=>$('#toast').hidden=true, 5000);
+}
+$('#toastUndo').onclick=()=>{ const u=state.undo; if(!u) return; state.undo=null; setProp(u.r,u.prop,u.from,{silent:true}); toast(`Undoing ${PROPS[u.prop]} on ${u.r.brand}…`); if(drawerMode==='card') openCard(u.r.id); };
+$('#connPill').onclick=loadRows;
+
+/* ---------- Drawer ---------- */
+let drawerMode=null;
+function openDrawer(mode){ drawerMode=mode; $('#drawer').hidden=false; $('#scrim').hidden=false; }
+function closeDrawer(){ drawerMode=null; $('#drawer').hidden=true; $('#scrim').hidden=true; }
+$('#drClose').onclick=closeDrawer; $('#scrim').onclick=closeDrawer;
+document.addEventListener('keydown',e=>{ if(e.key==='Escape' && !$('#drawer').hidden) closeDrawer(); });
+
+function opt(list,cur){ return list.map(o=>`<option value="${esc(o.k)}" ${o.k===(cur||'')?'selected':''}>${esc(o.label||o.k)}</option>`).join(''); }
+function openCard(id){
+  const r=rows.find(x=>x.id===id); if(!r) return;
+  $('#drTitle').textContent=r.brand;
+  const typeOpts=[{k:'',label:'—'},...Object.keys(TYPES).map(k=>({k}))];
+  $('#drBody').innerHTML=`
+    <div class="two">
+      <div class="field"><label for="fStatus">Status <span class="np">Status</span></label><select id="fStatus" data-p="status">${opt(STATUSES,r.status)}</select></div>
+      <div class="field"><label for="fDType">Deal type <span class="np">Deal Type</span></label><select id="fDType" data-p="type">${opt(typeOpts,r.type)}</select></div>
+    </div>
+    <div class="two">
+      <div class="field"><label for="fDead">${r.live?'Stream date':'Deadline'} <span class="np">Deadline</span></label><input type="date" id="fDead" data-dl="d" value="${esc(r.deadline)}"></div>
+      <div class="field"><label for="fFee">Fee <span class="np">Fee</span></label><input id="fFee" data-p="fee" value="${esc(r.fee)}"></div>
+    </div>
+    <div class="field"><label for="fNext">Next step <span class="np">Next Step</span></label><textarea id="fNext" data-p="next">${esc(r.next)}</textarea></div>
+    <div class="two">
+      <div class="field"><span class="lab">Agency / platform</span><span class="ro">${esc(r.agency)||'—'}</span></div>
+      <div class="field"><span class="lab">Platforms</span><span class="ro">${r.platforms.map(esc).join(', ')||'—'}</span></div>
+      <div class="field"><span class="lab">Last edited</span><span class="ro">${r.edited?new Date(r.edited).toLocaleString('en-SG',{day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'}):'—'}</span></div>
+      <div class="field"><span class="lab">Last activity</span><span class="ro">${r.last?fmt(r.last):'—'}</span></div>
+      <div class="field"><span class="lab">Notion page</span><span class="ro"><a href="https://app.notion.com/p/${esc(r.id)}" target="_blank" rel="noopener">Open in Notion ↗</a></span></div>
+    </div>
+    <section class="mail" id="pageBox" aria-live="polite"><h3>From the Notion page</h3><p class="intro">Loading…</p></section>
+    <p class="note">Changes save to this Notion page as soon as you leave a field (the Notion property is shown in pink). Last Activity is set to today.</p>
+    ${r.gmail?`<section class="mail" id="mailBox" aria-live="polite"><h3>Email history <small>from the Notion page</small></h3><p class="intro">Loading…</p></section>`:''}`;
+  loadPage(r);
+  if(r.live){ const two=$('#fDead').closest('.two'); two.insertAdjacentHTML('afterend',`<div class="two"><div class="field"><label for="fT1">Starts <span class="np">Deadline time</span></label><input type="time" id="fT1" data-dl="t" value="${esc(r.tStart||'')}"></div><div class="field"><label for="fT2">Ends</label><input type="time" id="fT2" data-dl="e" value="${esc(r.tEnd||'')}"></div></div>`); }
+  $('#drBody').querySelectorAll('[data-p]').forEach(el=>el.addEventListener('change',()=>setProp(r,el.dataset.p,el.value.trim())));
+  $('#drBody').querySelectorAll('[data-dl]').forEach(el=>el.addEventListener('change',()=>{
+    const d=$('#fDead').value, t=r.live?($('#fT1').value||''):'', e=r.live&&t?($('#fT2').value||''):'';
+    setProp(r,'dl', d?`${d}|${t}|${e}`:'');
+  }));
+  openDrawer('card');
+}
+function mdInline(t){
+  let h=esc(t).replace(/&lt;br\s*\/?&gt;/g,'<br>').replace(/&lt;(\/?)(b|i|u|s|strong|em)&gt;/g,'<$1$2>');
+  h=h.replace(/\[([^\]]*)\]\(((?:https?:|mailto:)[^)\s]+)\)/g,(m,txt,u)=>`<a href="${u}" target="_blank" rel="noopener">${txt}</a>`);
+  h=h.replace(/\*\*([^*]+)\*\*/g,'<b>$1</b>');
+  return h.replace(/\\(&lt;|&gt;|&amp;|[\\*_`#\[\]~|$-])/g,'$1');
+}
+function normalizeBody(b){
+  // Notion sometimes returns blocks as multi-line HTML (<ol><li>…</li></ol>, <p>…</p>); turn them into markdown lines
+  const one=t=>t.replace(/<\/?p\b[^>]*>/g,' ').replace(/\s*\n\s*/g,' ').trim();
+  const lis=(inner,mark)=>inner.replace(/<li\b[^>]*>([\s\S]*?)<\/li>/g,(m,t)=>`\n${mark} ${one(t)}`).replace(/\n\s*\n(?=(?:1\.|-) )/g,'\n');
+  let out=b;
+  for(let i=0;i<4;i++){ // innermost lists first, a few levels deep
+    out=out.replace(/<ol\b[^>]*>((?:(?!<[ou]l\b)[\s\S])*?)<\/ol>/g,(m,inner)=>'\n'+lis(inner,'1.')+'\n')
+           .replace(/<ul\b[^>]*>((?:(?!<[ou]l\b)[\s\S])*?)<\/ul>/g,(m,inner)=>'\n'+lis(inner,'-')+'\n');
+  }
+  out=out.replace(/<li\b[^>]*>([\s\S]*?)<\/li>/g,(m,t)=>`\n- ${one(t)}\n`)
+         .replace(/<p\b[^>]*>([\s\S]*?)<\/p>/g,(m,t)=>`\n${one(t)}\n`)
+         .replace(/<\/?(ol|ul)\b[^>]*>/g,'');
+  return out;
+}
+function prepLine(l){
+  // Turn Notion's XML-ish blocks into plain markdown/text before escaping
+  return l.replace(/<(page|database)\s+url="([^"]+)"[^>]*>([\s\S]*?)<\/\1>/g,(m,t,u,txt)=>`[${txt.trim()||'Linked page'}](${u})`)
+    .replace(/<mention-[a-z]+[^>]*url="([^"]+)"[^>]*>([\s\S]*?)<\/mention-[a-z]+>/g,'[$2]($1)')
+    .replace(/<mention-date[^>]*start="([^"]+)"[^>]*\/?>(?:<\/mention-date>)?/g,'$1')
+    .replace(/<(file|pdf|image|video|audio)\b[^>]*source="([^"]*)"[^>]*\/?>(?:<\/\1>)?/g,(m,k,src)=>{ let n=''; try{ n=decodeURIComponent((src.match(/[?&]name=([^&]+)/)||[])[1]||''); }catch(_){}
+        n=n||(src.startsWith('http')?src.split('/').pop().split('?')[0]:''); return `📎 ${n||('attached '+k)} (open in Notion to view)`; })
+    .replace(/<(unknown|empty-block|p|image|file|video|audio|pdf|embed|bookmark)\b[^>]*\/>/g,'')
+    .replace(/<\/?(callout|columns|column|table|tr|td|th|details|summary|toggle|colgroup|col|span|div|thead|tbody)\b[^>]*>/g,' ')
+    .replace(/!\[([^\]]*)\]\(([^)\s]+)\)/g,(m,a,u)=>`[${a||'image'}](${u})`);
+}
+function mdBlock(lines){
+  let out='',para=[],list=[],ltag='ul',tbl=[];
+  const flushT=()=>{ if(tbl.length){ const rowsT=tbl.filter(r=>!/^\|?\s*:?-{2,}/.test(r.replace(/\s/g,'').replace(/^\|/,'')));
+      const cells=r=>r.replace(/^\|/,'').replace(/\|$/,'').split(/(?<!\\)\|/).map(c=>mdInline(c.trim()));
+      out+=`<div class="tbl"><table>${rowsT.map((r,i)=>`<tr>${cells(r).map(c=>i===0?`<th>${c}</th>`:`<td>${c}</td>`).join('')}</tr>`).join('')}</table></div>`; tbl=[]; } };
+  const flushP=()=>{ if(para.length){ out+=`<p>${para.map(mdInline).join('<br>')}</p>`; para=[]; } };
+  const flushL=()=>{ if(list.length){ out+=`<${ltag}>${list.join('')}</${ltag}>`; list=[]; } };
+  lines.forEach(l0=>{ const t=prepLine(l0).trim();
+    if(/^\|.*\|$/.test(t)){ flushP(); flushL(); tbl.push(t); return; } else flushT();
+    if(!t||t==='---'){ flushP(); flushL(); if(t==='---') out+='<hr>'; return; }
+    let m;
+    if((m=t.match(/^(#{1,6})\s+(.*)$/))){ flushP(); flushL(); out+=`<h4>${mdInline(m[2])}</h4>`; return; }
+    if((m=t.match(/^[-*•]\s+\[( |x|X)\]\s+(.*)$/))){ flushP(); if(ltag!=='ul'){flushL();ltag='ul';} list.push(`<li class="chk">${m[1]===' '?'☐':'☑'} ${mdInline(m[2])}</li>`); return; }
+    if((m=t.match(/^[-*•]\s+(.*)$/))){ flushP(); if(ltag!=='ul'){flushL();ltag='ul';} list.push(`<li>${mdInline(m[1])}</li>`); return; }
+    if((m=t.match(/^\d+[.)]\s+(.*)$/))){ flushP(); if(ltag!=='ol'){flushL();ltag='ol';} list.push(`<li>${mdInline(m[1])}</li>`); return; }
+    if((m=t.match(/^>\s?(.*)$/))){ flushP(); flushL(); out+=`<blockquote>${mdInline(m[1])}</blockquote>`; return; }
+    flushL(); para.push(t); });
+  flushP(); flushL(); flushT(); return out;
+}
+function historyHtml(md){
+  const i=md.indexOf('## Email history'); if(i<0) return '';
+  const lines=md.slice(i).split('\n').slice(1);
+  const intro=[], msgs=[]; let cur=null;
+  lines.forEach(l=>{ if(/^###\s/.test(l)){ cur={h:l.replace(/^###\s+/,''),body:[]}; msgs.push(cur); } else if(cur) cur.body.push(l); else intro.push(l); });
+  if(!msgs.length) return '';
+  return `<div class="intro">${mdBlock(intro.filter(l=>l.trim()!=='---'))}</div>` + msgs.map((m,k)=>{
+    const parts=m.h.split(/\s+\u00b7\s+/); const when=parts.shift()||''; const who=parts.join(' \u00b7 ');
+    const me=/^You\b/.test(who);
+    return `<details class="msg ${me?'me':''}" ${k===msgs.length-1?'open':''}><summary><b>${mdInline(who)}</b><span>${esc(when)}</span></summary><div class="mb">${mdBlock(m.body.filter(l=>l.trim()!=='---'))}</div></details>`;
+  }).join('');
+}
+async function loadPage(r){
+  drawerCard=r.id;
+  const put=(sel,title,html)=>{ const b=document.querySelector(sel); if(b && drawerCard===r.id) b.innerHTML=title+html; };
+  const T1='<h3>From the Notion page</h3>', T2='<h3>Email history <small>from the Notion page</small></h3>';
+  if(!mcp){ put('#pageBox',T1,`<p class="intro">Open this board on claude.ai to see the page content.</p>`); put('#mailBox',T2,''); return; }
+  try{
+    const res=await mcp.callTool(NOTION,'notion-fetch',{id:r.id},{cache:false});
+    const p=parsePayload(res); const text=(p&&typeof p==='object'?p.text:String(p||''))||'';
+    const c=text.match(/<content>([\s\S]*?)<\/content>/); const body=c?normalizeBody(c[1]):'';
+    const k=body.indexOf('## Email history');
+    const notes=(k<0?body:body.slice(0,k)).split('\n');
+    const notesHtml=mdBlock(notes);
+    put('#pageBox',T1, notesHtml?`<div class="pg">${notesHtml}</div>`:`<p class="intro">This page has no notes yet. Anything you write on the deal's Notion page shows up here.</p>`);
+    const hist=k<0?'':historyHtml(body.slice(k));
+    put('#mailBox',T2, hist||`<p class="intro">No email history on this Notion page yet. The daily sync adds it.</p>`);
+  }catch(e){
+    const msg=`<p class="intro">Couldn't load the page: ${esc(errInfo(e).msg.replace(/\s*https?:\S+/g,''))} <a href="https://app.notion.com/p/${esc(r.id)}" target="_blank" rel="noopener">Open in Notion ↗</a></p>`;
+    put('#pageBox',T1,msg); put('#mailBox',T2,'');
+  }
+}
+let drawerCard=null;
+const ST_LABEL={queued:'Waiting',writing:'Saving…',synced:'Saved',failed:'Failed',unknown:'Check',pulled:'Loaded'};
+function refreshLog(){ if(drawerMode==='log') renderLog(); }
+function renderLog(){
+  $('#drTitle').textContent='Notion writes';
+  const items=state.log;
+  $('#drBody').innerHTML = `<p class="note">Every change you make on the board is saved to that deal’s Notion page. Failed saves are undone on the board; “Check” means Notion didn’t confirm, so refresh to see what was saved.</p>` +
+    (items.length?`<div class="log">${items.map(e=>`<div class="log-item">
+      <div class="r1"><span>${e.t.toLocaleTimeString('en-SG',{hour:'2-digit',minute:'2-digit',second:'2-digit'})} · ${esc(e.brand)}</span><span class="st ${e.st}">${ST_LABEL[e.st]||e.st}</span></div>
+      ${e.prop?`<div class="what"><b>${PROPS[e.prop]}</b>: ${esc(e.from||'empty')} → ${esc(e.to||'empty')}</div>${e.err?`<div class="what err">${esc(e.err)}</div>`:''}<code>${esc(payloadText(e))}</code>`:`<div class="what">${esc(e.msg)}</div>`}
+    </div>`).join('')}</div>`:`<div class="empty">No changes yet. Drag a card to another column or edit a card, and the update it sends to Notion shows here.</div>`);
+}
+$('#openLog').onclick=()=>{ renderLog(); openDrawer('log'); };
+
+/* ---------- Board interactions ---------- */
+const board=$('#board'); let dragId=null;
+board.addEventListener('dragstart',e=>{ const c=e.target.closest('.card'); if(!c) return; dragId=c.dataset.id; c.classList.add('dragging'); e.dataTransfer.effectAllowed='move'; try{e.dataTransfer.setData('text/plain',dragId);}catch(_){} });
+board.addEventListener('dragend',e=>{ const c=e.target.closest('.card'); if(c) c.classList.remove('dragging'); document.querySelectorAll('.col.over').forEach(x=>x.classList.remove('over')); });
+board.addEventListener('dragover',e=>{ const col=e.target.closest('.col'); if(!col||!dragId) return; e.preventDefault(); document.querySelectorAll('.col.over').forEach(x=>x!==col&&x.classList.remove('over')); col.classList.add('over'); });
+board.addEventListener('dragleave',e=>{ const col=e.target.closest('.col'); if(col && !col.contains(e.relatedTarget)) col.classList.remove('over'); });
+board.addEventListener('drop',e=>{ const col=e.target.closest('.col'); if(!col||!dragId) return; e.preventDefault(); col.classList.remove('over');
+  const r=rows.find(x=>x.id===dragId); dragId=null; setProp(r,'status',col.dataset.col); });
+board.addEventListener('click',e=>{
+  const cb=e.target.closest('[data-collapse]'); if(cb){ state.collapsed.add(cb.dataset.collapse); saveView(); renderBoard(); return; }
+  const col=e.target.closest('.col.collapsed'); if(col){ state.collapsed.delete(col.dataset.col); saveView(); renderBoard(); return; }
+  const c=e.target.closest('.card'); if(c) openCard(c.dataset.id);
+});
+board.addEventListener('keydown',e=>{ if((e.key==='Enter'||e.key===' ')&&e.target.classList.contains('card')){ e.preventDefault(); openCard(e.target.dataset.id);} });
+
+$('#kpis').addEventListener('click',e=>{ const b=e.target.closest('.kpi'); if(!b||!ready()) return; state.kpi = state.kpi===b.dataset.k?'':b.dataset.k; if(state.kpi){ state.collapsed.clear(); state.stage=''; } render(); });
+$('#navStatus').onclick=()=>{ state.dealOpen=!state.dealOpen; saveView(); renderSubnav(); };
+$('#navArchive').onclick=()=>{ state.archOpen=!state.archOpen; saveView(); renderSubnav(); };
+$('#calPrev').onclick=()=>{ const m=state.calMonth; state.calMonth=new Date(m.getFullYear(),m.getMonth()-1,1); renderCal(); };
+$('#calNext').onclick=()=>{ const m=state.calMonth; state.calMonth=new Date(m.getFullYear(),m.getMonth()+1,1); renderCal(); };
+$('#calToday').onclick=()=>{ state.calMonth=new Date(TODAY.getFullYear(),TODAY.getMonth(),1); renderCal(); };
+$('#calGrid').addEventListener('click',e=>{ const b=e.target.closest('.cal-ev'); if(b) openCard(b.dataset.id); });
+$('#q').addEventListener('input',e=>{ state.q=e.target.value; renderBoard(); });
+function setupMulti(el, key, opts, allLabel, plural, sw){
+  const pop=el.querySelector('.ms-pop'), lab=el.querySelector('.ms-l');
+  pop.innerHTML = opts.map(o=>`<label><input type="checkbox" value="${esc(o)}">${sw?`<i class="sw" style="background:var(--n-${sw(o)})"></i>`:''}${esc(o)}</label>`).join('')
+    + `<div class="ms-foot"><button type="button" data-all>Select all</button><button type="button" data-clear>Clear</button></div>`;
+  const paint=()=>{ const set=state[key]; lab.textContent = !set.size ? allLabel : set.size===1 ? [...set][0] : `${set.size} ${plural}`;
+    el.classList.toggle('on', set.size>0); pop.querySelectorAll('input').forEach(i=>i.checked=set.has(i.value)); };
+  pop.addEventListener('change',e=>{ const i=e.target; if(i.checked) state[key].add(i.value); else state[key].delete(i.value); paint(); renderBoard(); });
+  pop.addEventListener('click',e=>{ if(e.target.matches('[data-clear]')){ state[key].clear(); paint(); renderBoard(); } else if(e.target.matches('[data-all]')){ opts.forEach(o=>state[key].add(o)); paint(); renderBoard(); } });
+  paint();
+}
+setupMulti($('#fType'),'type',Object.keys(TYPES),'All deal types','deal types',t=>TYPES[t]);
+setupMulti($('#fPlat'),'plat',['TikTok','Instagram','Live','Shopee'],'All platforms','platforms');
+setupMulti($('#fSrc'),'src',['Email','Instagram','WhatsApp','Unknown'],'All sources','sources',k=>SRC_C[k]);
+document.addEventListener('click',e=>{ document.querySelectorAll('details.ms[open]').forEach(d=>{ if(!d.contains(e.target)) d.open=false; }); });
+document.addEventListener('keydown',e=>{ if(e.key==='Escape') document.querySelectorAll('details.ms[open]').forEach(d=>{ d.open=false; d.querySelector('summary').focus(); }); });
+document.querySelectorAll('details.ms').forEach(d=>d.addEventListener('toggle',()=>{ if(d.open) document.querySelectorAll('details.ms[open]').forEach(o=>{ if(o!==d) o.open=false; }); }));
+document.querySelectorAll('.btabs [data-board]').forEach(b=>b.onclick=()=>{ if(state.board===b.dataset.board) return; state.board=b.dataset.board; if(state.stage!==''&&state.stage!==ARCH) state.stage=''; state.kpi=''; saveView(); render(); });
+$('#fSort').value=state.sort; $('#fSort').onchange=e=>{ state.sort=e.target.value; saveView(); renderBoard(); };
+$('#fStub').checked=state.hideStub; $('#fStub').onchange=e=>{ state.hideStub=e.target.checked; saveView(); renderBoard(); };
+function applyChrome(){ document.querySelector('.app').classList.toggle('side-closed',!!state.sideClosed); $('#sideOpen').hidden=!state.sideClosed; }
+document.querySelector('.side').addEventListener('click',e=>{ const b=e.target.closest('.sub-btn'); if(!b) return; state.stage=b.dataset.stage; render(); document.querySelector('.board-h').scrollIntoView({behavior:'smooth',block:'start'}); });
+$('#sideClose').onclick=()=>{ state.sideClosed=true; saveView(); applyChrome(); $('#sideOpen').focus(); };
+$('#sideOpen').onclick=()=>{ state.sideClosed=false; saveView(); applyChrome(); };
+applyChrome();
+render();
+
+(async()=>{
+  try{ mcp = window.claude && typeof window.claude.use==='function' ? await window.claude.use('mcp') : null; }catch(_){ mcp=null; }
+  if(!mcp){ load={state:'nomcp',msg:'',code:'',at:null}; render(); return; }
+  loadRows();
+})();
+</script>
