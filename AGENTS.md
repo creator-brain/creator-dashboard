@@ -31,7 +31,7 @@ Properties the app uses:
 |---|---|---|
 | `Brand` | title | May contain inline HTML from Notion (e.g. `<b>`); strip tags for display |
 | `Status` | select | 11 options, board order below |
-| `Deal Type` | select | Paid, Gifted, TikTok Shop affiliate, UGC, Livestream, Other, Scam |
+| `Deal Type` | multi_select | Paid, Gifted, TikTok Shop affiliate, UGC, Livestream, Other, Scam. JSON array string in queries; `r.type` is an array, written back as an array of option names (`null` clears) |
 | `Platforms` | multi_select | TikTok, Instagram, Live, Shopee (JSON array string in queries) |
 | `Agency / Platform` | text | Also used to infer source and livestream |
 | `Fee`, `Next Step`, `Deliverables`, `Product`, `Comments` | text | |
@@ -63,7 +63,7 @@ All calls go through `mcp.callTool('Notion', <tool>, input, {cache:false})`, whe
 ## App structure (inside `collab-pipeline.html`)
 
 - **State:** `rows` (all deals), `state` (filters, stage, sort, tab, collapsed columns…). View preferences persist in `localStorage` key `cp-view` (wrapped in try/catch).
-- **Tabs:** `state.board` = `'ugc'` | `'live'`. `isLive(r)`: Deal Type = Livestream, or Platforms include Live, or brand/agency mention live / livestream / streams. `scoped()` = rows on the current tab; KPIs, banner, sidebar counts, board, calendar all use it.
+- **Tabs:** `state.board` = `'ugc'` | `'live'`. `isLive(r)`: Deal Type includes Livestream, or Platforms include Live, or brand/agency mention live / livestream / streams. `scoped()` = rows on the current tab; KPIs, banner, sidebar counts, board, calendar all use it.
 - **Columns:** `groups()` returns `STATUSES` (UGC) or `LIVE_GROUPS` (simplified: New / Action needed / Awaiting brand → **Stream booked** (Backlog + production statuses) → Streamed – payment pending). `inG(group,row)` handles multi-status groups. Dropping a card on a column writes that group's `k` status.
 - **Source:** `srcOf(r)` → Email (Gmail Thread set) / WhatsApp / Instagram (from Agency text) / Unknown. Filter pill + card tag.
 - **Sort:** default Last Activity, newest first (`state.sort`), alternatives: deadline, last edited, brand.

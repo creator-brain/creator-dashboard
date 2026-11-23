@@ -176,6 +176,12 @@ main{display:flex;flex-direction:column;gap:20px;padding-block:24px 48px}
 .ms-pop label:hover{background:var(--surface-2)}
 .ms-pop input{accent-color:var(--forest);margin:0}
 .ms-pop .sw{width:9px;height:9px;border-radius:50%;flex:none}
+.ms.dtype summary{white-space:normal;padding:6px 8px;min-height:36px}
+.ms.dtype .ms-l{display:flex;flex-wrap:wrap;gap:4px}
+.ms.dtype .ms-l .none{color:var(--muted)}
+.ms.dtype .ms-pop{min-width:100%}
+.field .ms-pop label{text-transform:none;letter-spacing:0;font-size:13px;font-weight:400;color:inherit;justify-content:flex-start;white-space:nowrap}
+.field .ms-pop input{width:auto;padding:0;border:0;flex:none}
 .ms-pop .ms-foot{display:flex;justify-content:space-between;border-top:1px solid var(--line);margin-top:4px;padding:6px 6px 2px}
 .ms-pop .ms-foot button{border:0;background:none;color:var(--accent);font-size:12.5px;font-weight:600;cursor:pointer;padding:2px}
 .ms-pop .ms-foot button:hover{text-decoration:underline}
@@ -523,11 +529,17 @@ function applyDl(r){ const [d='',t='',e='']=(r.dl||'').split('|'); r.deadline=d;
 const t12=t=>{ if(!t) return ''; let [h,m]=t.split(':').map(Number); const ap=h>=12?'pm':'am'; h=h%12||12; return m?`${h}:${String(m).padStart(2,'0')}${ap}`:`${h}${ap}`; };
 const fmtDay=d=>new Date(d+'T00:00:00').toLocaleDateString('en-SG',{weekday:'short',day:'numeric',month:'short'});
 function streamLabel(r){ return r.deadline ? `${fmtDay(r.deadline)}${r.tStart?` · ${t12(r.tStart)}${r.tEnd?'–'+t12(r.tEnd):''}`:''}` : ''; }
+// Multi-select values arrive as a JSON array string ('["Paid","UGC"]'); older data may be a plain option name
+function msList(v){ if(Array.isArray(v)) return v.map(String); if(v==null||v==='') return [];
+  const s=String(v).trim(); if(s.startsWith('[')){ try{ const a=JSON.parse(s); return Array.isArray(a)?a.map(String):[]; }catch(_){ return []; } } return [s]; }
+const sortTypes=a=>{ const k=Object.keys(TYPES); return [...a].sort((x,y)=>(k.indexOf(x)+1||99)-(k.indexOf(y)+1||99)); };
+const showVal=v=>Array.isArray(v)?(v.join(', ')||'empty'):(v||'empty');
+const sameVal=(a,b)=>Array.isArray(a)||Array.isArray(b)?JSON.stringify(a||[])===JSON.stringify(b||[]):a===b;
 function toRow(x){
   const m = String(x.url||'').match(/([0-9a-f]{32})\s*$/i);
-  let plats=[]; try{ plats = x.Platforms ? JSON.parse(x.Platforms) : []; }catch(_){ plats=[]; }
-  return {id:m?m[1]:String(x.url||''), url:x.url, brand:x.Brand||'Untitled', status:x.Status||'', type:x['Deal Type']||'', agency:x['Agency / Platform']||'',
-    platforms:Array.isArray(plats)?plats:[], fee:x.Fee||'', next:x['Next Step']||'', deadline:'', dl:dlFrom(x.deadline,x.deadline_end), last:(x.last||'').slice(0,10), edited:x.edited?String(x.edited).replace(' ','T'):'', gmail:x.gmail||''};
+  const plats=msList(x.Platforms), types=msList(x['Deal Type']);
+  return {id:m?m[1]:String(x.url||''), url:x.url, brand:x.Brand||'Untitled', status:x.Status||'', type:types, agency:x['Agency / Platform']||'',
+    platforms:plats, fee:x.Fee||'', next:x['Next Step']||'', deadline:'', dl:dlFrom(x.deadline,x.deadline_end), last:(x.last||'').slice(0,10), edited:x.edited?String(x.edited).replace(' ','T'):'', gmail:x.gmail||''};
 }
 function srcOf(r){ if(r.gmail) return 'Email'; if(/whatsapp/i.test(r.agency)) return 'WhatsApp'; if(/instagram/i.test(r.agency)) return 'Instagram'; return 'Unknown'; }
 function withSrc(r){ applyDl(r); r.source=srcOf(r); r.live=isLive(r); return r;
@@ -577,7 +589,7 @@ const queue=[]; let writing=false;
 function propsFor(e){
   const p = {'date:Last Activity:start':e.day,'date:Last Activity:is_datetime':0};
   if(e.prop==='status') p['Status']=e.to||null;
-  else if(e.prop==='type') p['Deal Type']=e.to||null;
+  else if(e.prop==='type') p['Deal Type']=(e.to&&e.to.length)?[...e.to]:null;
   else if(e.prop==='fee') p['Fee']=e.to;
   else if(e.prop==='next') p['Next Step']=e.to;
   else if(e.prop==='deadline'){ if(e.to){ p['date:Deadline:start']=e.to; p['date:Deadline:is_datetime']=0; } else p['Deadline']=null; }
@@ -589,12 +601,12 @@ function propsFor(e){
 }
 function setProp(r, prop, value, opts={}){
   if(!ready() || !r) return;
-  const from = r[prop]??'';
-  if(from===value) return;
+  const from = Array.isArray(r[prop])?[...r[prop]]:(r[prop]??'');
+  if(sameVal(from,value)) return;
   const e={t:new Date(), id:r.id, brand:r.brand, prop, from, to:value, prevLast:r.last, prevEdited:r.edited, day:todayISO(), st:'queued'};
   r[prop]=value; if(prop==='dl') applyDl(r); r.last=e.day; r.edited=new Date().toISOString();
   state.log.unshift(e); queue.push(e);
-  if(!opts.silent){ state.undo={r,prop,from}; toast(`${PROPS[prop]} → ${prop==='dl'?(streamLabel(r)||'empty'):(value||'empty')} · saving to Notion…`, true); }
+  if(!opts.silent){ state.undo={r,prop,from}; toast(`${PROPS[prop]} → ${prop==='dl'?(streamLabel(r)||'empty'):showVal(value)} · saving to Notion…`, true); }
   render(); flashCard(r.id); pump();
 }
 async function pump(){
@@ -612,7 +624,7 @@ async function pump(){
         toast(`Not sure the ${PROPS[e.prop]} change on ${e.brand} saved. Refresh to check.`);
       } else {
         e.st='failed';
-        if(r && r[e.prop]===e.to){ r[e.prop]=e.from; if(e.prop==='dl') applyDl(r); r.last=e.prevLast; r.edited=e.prevEdited; }
+        if(r && sameVal(r[e.prop],e.to)){ r[e.prop]=e.from; if(e.prop==='dl') applyDl(r); r.last=e.prevLast; r.edited=e.prevEdited; }
         toast(`Couldn’t save ${PROPS[e.prop]} on ${e.brand}. Change undone.`);
         render();
       }
@@ -628,7 +640,7 @@ function visible(){
   const q=state.q.toLowerCase(); const kp=KPIS.find(k=>k.k===state.kpi);
   return scoped().filter(r=>{
     if(state.hideStub && isStub(r)) return false;
-    if(state.type.size && !state.type.has(r.type)) return false;
+    if(state.type.size && !r.type.some(t=>state.type.has(t))) return false;
     if(state.plat.size && !r.platforms.some(p=>state.plat.has(p))) return false;
     if(state.src.size && !state.src.has(r.source)) return false;
     if(kp && !kp.f(r)) return false;
@@ -643,7 +655,7 @@ function renderKpis(){
   }).join('');
 }
 const ARCH='@archive';
-function isLive(r){ return r.type==='Livestream' || r.platforms.includes('Live') || /\blive\b|livestream|\bstreams?\b/i.test(r.brand+' '+r.agency); }
+function isLive(r){ return r.type.includes('Livestream') || r.platforms.includes('Live') || /\blive\b|livestream|\bstreams?\b/i.test(r.brand+' '+r.agency); }
 const LIVE_GROUPS=[
   {k:'New - not replied',c:'red',ph:'Inbound'},{k:'Action needed',c:'orange',ph:'Inbound'},{k:'Awaiting brand',c:'yellow',ph:'Inbound'},
   {k:'Backlog',label:'Stream booked',c:'blue',ph:'Scheduled',keys:['Backlog','Ideas/Scripting','Filming','Editing','Draft sent/Scheduled']},
@@ -681,7 +693,7 @@ function cardHtml(r){
     const lbl = CLOSED.has(r.status)?fmt(r.deadline):d<0?`${-d}d overdue`:d===0?'Due today':`Due ${fmt(r.deadline)}`; due=`<span class="due ${cls}">${lbl}</span>`; }
   const stream = r.live && r.deadline ? `<div class="when ${!CLOSED.has(r.status)&&days(r.deadline)<0?'past':''}">◷ ${esc(streamLabel(r))}</div>` : '';
   if(stream) due='';
-  const type = r.type?`<span class="chip c-${TYPES[r.type]||'gray'}">${esc(r.type)}</span>`:'';
+  const type = sortTypes(r.type).map(t=>`<span class="chip c-${TYPES[t]||'gray'}">${esc(t)}</span>`).join('');
   const plats = r.platforms.map(p=>`<span class="plat">${esc(p)}</span>`).join('');
   const last = r.edited ? `Last edited ${ago(r)}` : 'Not edited yet';
   return `<div class="card" draggable="true" data-id="${esc(r.id)}" tabindex="0" role="button" aria-label="${esc(r.brand)}">
@@ -797,11 +809,10 @@ function opt(list,cur){ return list.map(o=>`<option value="${esc(o.k)}" ${o.k===
 function openCard(id){
   const r=rows.find(x=>x.id===id); if(!r) return;
   $('#drTitle').textContent=r.brand;
-  const typeOpts=[{k:'',label:'—'},...Object.keys(TYPES).map(k=>({k}))];
   $('#drBody').innerHTML=`
     <div class="two">
       <div class="field"><label for="fStatus">Status <span class="np">Status</span></label><select id="fStatus" data-p="status">${opt(STATUSES,r.status)}</select></div>
-      <div class="field"><label for="fDType">Deal type <span class="np">Deal Type</span></label><select id="fDType" data-p="type">${opt(typeOpts,r.type)}</select></div>
+      <div class="field"><span class="lab" id="fDTypeL">Deal type <span class="np">Deal Type</span></span><details class="ms dtype" id="fDType"><summary aria-labelledby="fDTypeL"><span class="ms-l"></span><span class="ms-c" aria-hidden="true">▾</span></summary><div class="ms-pop" role="group" aria-label="Deal types">${Object.keys(TYPES).map(t=>`<label><input type="checkbox" value="${esc(t)}" ${r.type.includes(t)?'checked':''}><i class="sw" style="background:var(--n-${TYPES[t]})"></i>${esc(t)}</label>`).join('')}</div></details></div>
     </div>
     <div class="two">
       <div class="field"><label for="fDead">${r.live?'Stream date':'Deadline'} <span class="np">Deadline</span></label><input type="date" id="fDead" data-dl="d" value="${esc(r.deadline)}"></div>
@@ -821,6 +832,11 @@ function openCard(id){
   loadPage(r);
   if(r.live){ const two=$('#fDead').closest('.two'); two.insertAdjacentHTML('afterend',`<div class="two"><div class="field"><label for="fT1">Starts <span class="np">Deadline time</span></label><input type="time" id="fT1" data-dl="t" value="${esc(r.tStart||'')}"></div><div class="field"><label for="fT2">Ends</label><input type="time" id="fT2" data-dl="e" value="${esc(r.tEnd||'')}"></div></div>`); }
   $('#drBody').querySelectorAll('[data-p]').forEach(el=>el.addEventListener('change',()=>setProp(r,el.dataset.p,el.value.trim())));
+  const dt=$('#fDType'), dtLab=()=>{ dt.querySelector('.ms-l').innerHTML = r.type.length ? sortTypes(r.type).map(t=>`<span class="chip c-${TYPES[t]||'gray'}">${esc(t)}</span>`).join('') : '<span class="none">—</span>'; };
+  dtLab();
+  dt.querySelectorAll('input').forEach(cb=>cb.addEventListener('change',()=>{
+    setProp(r,'type',sortTypes([...dt.querySelectorAll('input:checked')].map(i=>i.value))); dtLab();
+  }));
   $('#drBody').querySelectorAll('[data-dl]').forEach(el=>el.addEventListener('change',()=>{
     const d=$('#fDead').value, t=r.live?($('#fT1').value||''):'', e=r.live&&t?($('#fT2').value||''):'';
     setProp(r,'dl', d?`${d}|${t}|${e}`:'');
@@ -918,7 +934,7 @@ function renderLog(){
   $('#drBody').innerHTML = `<p class="note">Every change you make on the board is saved to that deal’s Notion page. Failed saves are undone on the board; “Check” means Notion didn’t confirm, so refresh to see what was saved.</p>` +
     (items.length?`<div class="log">${items.map(e=>`<div class="log-item">
       <div class="r1"><span>${e.t.toLocaleTimeString('en-SG',{hour:'2-digit',minute:'2-digit',second:'2-digit'})} · ${esc(e.brand)}</span><span class="st ${e.st}">${ST_LABEL[e.st]||e.st}</span></div>
-      ${e.prop?`<div class="what"><b>${PROPS[e.prop]}</b>: ${esc(e.from||'empty')} → ${esc(e.to||'empty')}</div>${e.err?`<div class="what err">${esc(e.err)}</div>`:''}<code>${esc(payloadText(e))}</code>`:`<div class="what">${esc(e.msg)}</div>`}
+      ${e.prop?`<div class="what"><b>${PROPS[e.prop]}</b>: ${esc(showVal(e.from))} → ${esc(showVal(e.to))}</div>${e.err?`<div class="what err">${esc(e.err)}</div>`:''}<code>${esc(payloadText(e))}</code>`:`<div class="what">${esc(e.msg)}</div>`}
     </div>`).join('')}</div>`:`<div class="empty">No changes yet. Drag a card to another column or edit a card, and the update it sends to Notion shows here.</div>`);
 }
 $('#openLog').onclick=()=>{ renderLog(); openDrawer('log'); };
