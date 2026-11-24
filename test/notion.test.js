@@ -1,0 +1,76 @@
+import test from 'node:test'
+import assert from 'node:assert/strict'
+import { listDeals, toDeal, updateDeal, updateProperties } from '../server/notion.js'
+
+const page = {
+  id: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa',
+  url: 'https://www.notion.so/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+  last_edited_time: '2026-11-24T02:00:00.000Z',
+  properties: {
+    Brand: { title: [{ plain_text: '<b>Acme</b>' }] },
+    Status: { select: { name: 'Action needed' } },
+    'Deal Type': { multi_select: [{ name: 'Paid' }, { name: 'UGC' }] },
+    Platforms: { multi_select: [{ name: 'TikTok' }] },
+    'Agency / Platform': { rich_text: [{ plain_text: 'Agency' }] },
+    Fee: { rich_text: [{ plain_text: '$500' }] },
+    'Next Step': { rich_text: [{ plain_text: 'Send draft' }] },
+    Deadline: { date: { start: '2026-12-01' } },
+    'Last Activity': { date: { start: '2026-11-24' } },
+    'Gmail Thread': { url: 'https://mail.google.com/thread' },
+  },
+}
+
+test('maps Notion properties to a safe deal model', () => {
+  const deal = toDeal(page)
+  assert.equal(deal.brand, 'Acme')
+  assert.deepEqual(deal.type, ['Paid', 'UGC'])
+  assert.equal(deal.deadlineStart, '2026-12-01')
+  assert.equal(deal.gmail, 'https://mail.google.com/thread')
+})
+
+test('builds Notion updates and stamps Last Activity', () => {
+  const result = updateProperties({ prop: 'dl', value: { start: '2026-12-01T10:00:00+08:00', end: '2026-12-01T11:00:00+08:00' } }, '2026-11-24')
+  assert.deepEqual(result.Deadline.date, { start: '2026-12-01T10:00:00+08:00', end: '2026-12-01T11:00:00+08:00' })
+  assert.equal(result['Last Activity'].date.start, '2026-11-24')
+  assert.deepEqual(updateProperties({ prop: 'type', value: [] }, '2026-11-24')['Deal Type'], { multi_select: [] })
+})
+
+test('paginates the configured data source without storing rows', async () => {
+  const originalFetch = globalThis.fetch
+  const originalToken = process.env.NOTION_TOKEN
+  const bodies = []
+  process.env.NOTION_TOKEN = 'test-token'
+  globalThis.fetch = async (_url, options) => {
+    const body = JSON.parse(options.body)
+    bodies.push(body)
+    return { ok: true, json: async () => bodies.length === 1 ? { results: [page], has_more: true, next_cursor: 'next' } : { results: [page], has_more: false } }
+  }
+  try {
+    const deals = await listDeals()
+    assert.equal(deals.length, 2)
+    assert.equal(bodies[1].start_cursor, 'next')
+  } finally {
+    globalThis.fetch = originalFetch
+    if (originalToken === undefined) delete process.env.NOTION_TOKEN
+    else process.env.NOTION_TOKEN = originalToken
+  }
+})
+
+test('refuses writes to a page outside the tracker', async () => {
+  const originalFetch = globalThis.fetch
+  const originalToken = process.env.NOTION_TOKEN
+  let calls = 0
+  process.env.NOTION_TOKEN = 'test-token'
+  globalThis.fetch = async () => {
+    calls++
+    return { ok: true, json: async () => ({ ...page, parent: { data_source_id: 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb' } }) }
+  }
+  try {
+    await assert.rejects(updateDeal(page.id, { prop: 'status', value: 'Completed' }, '2026-11-24'), /outside the Collab Tracker/)
+    assert.equal(calls, 1)
+  } finally {
+    globalThis.fetch = originalFetch
+    if (originalToken === undefined) delete process.env.NOTION_TOKEN
+    else process.env.NOTION_TOKEN = originalToken
+  }
+})

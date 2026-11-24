@@ -456,6 +456,7 @@ const STATUSES = [
   {k:'New - not replied',c:'red',ph:'Inbound'},
   {k:'Action needed',c:'orange',ph:'Inbound'},
   {k:'Awaiting brand',c:'yellow',ph:'Inbound'},
+  {k:'Follow up - 14+ days',label:'Follow up · 14+ days',c:'orange',ph:'Inbound'},
   {k:'Ideas/Scripting',c:'purple',ph:'Production'},
   {k:'Filming',c:'default',ph:'Production'},
   {k:'Editing',c:'blue',ph:'Production'},
@@ -657,7 +658,7 @@ function renderKpis(){
 const ARCH='@archive';
 function isLive(r){ return r.type.includes('Livestream') || r.platforms.includes('Live') || /\blive\b|livestream|\bstreams?\b/i.test(r.brand+' '+r.agency); }
 const LIVE_GROUPS=[
-  {k:'New - not replied',c:'red',ph:'Inbound'},{k:'Action needed',c:'orange',ph:'Inbound'},{k:'Awaiting brand',c:'yellow',ph:'Inbound'},
+  {k:'New - not replied',c:'red',ph:'Inbound'},{k:'Action needed',c:'orange',ph:'Inbound'},{k:'Awaiting brand',c:'yellow',ph:'Inbound'},{k:'Follow up - 14+ days',label:'Follow up · 14+ days',c:'orange',ph:'Inbound'},
   {k:'Backlog',label:'Stream booked',c:'blue',ph:'Scheduled',keys:['Backlog','Ideas/Scripting','Filming','Editing','Draft sent/Scheduled']},
   {k:'Completed - payment pending',label:'Streamed – payment pending',c:'pink',ph:'Wrap-up'},
   {k:'Completed',label:'Streamed',c:'green',ph:'Archive'},{k:'Missed/Not Interested',c:'gray',ph:'Archive'}];
