@@ -26,7 +26,13 @@ The Vercel project is `maguireongs-projects/collab-pipeline`. Its production URL
 
 ## Connect Gmail
 
-The deal drawer can read a linked Gmail thread, save a reply as a Gmail draft, and send a reply after confirmation. The Gmail link must be in that deal's Notion `Gmail Thread` property. Email text is displayed as plain text. Gmail account access uses OAuth; the server never puts Google tokens in the frontend bundle or stores them in Notion. A refresh token is kept in an encrypted, HTTP-only browser cookie. Disconnecting removes that cookie.
+The Gmail conversation section appears only for deals with an **Email** source pill. The pill comes from that deal's Notion `Gmail Thread` property. Add a Gmail URL there to link a deal that does not yet have an Email pill; linked deals can change their conversation link in the drawer. The server checks that the connected Gmail account can read a newly linked conversation before saving it. Existing `thread-f:` Gmail links are supported. Opening the deal retrieves the full conversation with the newest non-draft message open, fills the reply recipient and subject, and sends or saves drafts in the same thread. Email text is displayed as plain text. Gmail account access uses OAuth; the server never puts Google tokens in the frontend bundle or stores them in Notion. A refresh token is kept in an encrypted, HTTP-only browser cookie. Disconnecting removes that cookie.
+
+The reply editor includes starting templates for requesting details, sharing a rate, following up, submitting a draft, checking payment, and declining. Selecting a template fills only the local editor. Review bracketed details and the recipient before choosing **Save draft** to store it in Gmail.
+
+The **Attachments** dropdown accepts files by picker or drag and drop, lists them for removal, and includes them in one saved draft or sent reply. Files stay in browser memory until that action; they are not stored in Notion. Each message can have up to 10 files and 2.5 MB total, with no thread-wide file count. For larger PR kits, use Gmail directly or share a link.
+
+The **Saved media kit** control stores one reusable file in this browser's IndexedDB. On any Email deal, choose **Attach saved media kit** in the Attachments dropdown to add it to that reply. The kit is never attached automatically. Browser storage is specific to the site origin and device, so a local copy does not carry over to the Vercel URL or another browser; choose the kit once on each origin where you want it available. The PDF is not in the repository or Notion.
 
 1. In [Google Cloud Console](https://console.cloud.google.com/), create or select a project and enable the **Gmail API**.
 2. Under **Google Auth platform**, configure **Branding** and **Audience**. For a personal Gmail account, choose **External**, add your own Google account as a test user, and add the `gmail.readonly` and `gmail.compose` scopes under **Data Access**. The latter permits drafts and sending. Google classifies both scopes as restricted, so an external production app may require verification; test-mode refresh tokens may expire after seven days.
@@ -38,7 +44,7 @@ For local testing, put the same client ID, secret and cookie key in `.env`, with
 
 ## Data and security
 
-Notion remains the only deal store. Browser `localStorage` keeps only display preferences. The token never enters the frontend bundle. The server limits reads and writes to the configured data source and validates property updates. It stamps `Last Activity` on every edit. Deal page content is rendered as escaped Markdown; HTML from Notion is not executed.
+Notion remains the only deal store. Browser `localStorage` keeps only display preferences, while IndexedDB holds the optional reusable media kit. The token never enters the frontend bundle. The server limits reads and writes to the configured data source and validates property updates. It stamps `Last Activity` on every edit. Deal page content is rendered as escaped Markdown; HTML from Notion is not executed.
 
 The old `collab-pipeline.html` is retained as the previously published Claude Artifact. The React app starts from `index.html` and does not need the Artifact runtime.
 

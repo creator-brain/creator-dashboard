@@ -119,23 +119,42 @@ export async function gmailRequest(req, path, options = {}) {
 
 export function threadIdFromUrl(value) {
   if (!value) return ''
+  const parse = tail => {
+    if (/^[a-f\d]{8,32}$/i.test(tail)) return tail.toLowerCase()
+    if (/^thread-f:\d{10,20}$/.test(tail)) {
+      const number = BigInt(tail.slice('thread-f:'.length))
+      return number <= 0xffffffffffffffffn ? number.toString(16) : ''
+    }
+    return ''
+  }
+  if (!value.includes('://')) return parse(value)
   try {
     const url = new URL(value)
-    if (url.hostname !== 'mail.google.com') return ''
+    if (url.protocol !== 'https:' || url.hostname !== 'mail.google.com') return ''
     const tail = (url.hash || url.pathname).split('/').filter(Boolean).at(-1)
-    return /^[a-zA-Z0-9_-]{8,128}$/.test(tail || '') ? tail : ''
+    return parse(tail || '')
   } catch { return '' }
 }
 
+export const gmailThreadUrl = id => `https://mail.google.com/mail/u/0/#all/${id}`
+
 const header = (message, name) => message.payload?.headers?.find(item => item.name?.toLowerCase() === name.toLowerCase())?.value || ''
 const decode = value => value ? Buffer.from(value, 'base64url').toString('utf8') : ''
-function bodyText(part) {
-  if (part.mimeType === 'text/plain' && part.body?.data) return decode(part.body.data)
-  for (const child of part.parts || []) {
-    const text = bodyText(child)
-    if (text) return text
-  }
-  return ''
+function htmlText(value) {
+  return value.replace(/<(script|style)\b[^>]*>[\s\S]*?<\/\1\s*>/gi, '')
+    .replace(/<\s*(br|\/p|\/div|\/li|\/tr)\b[^>]*>/gi, '\n')
+    .replace(/<[^>]+>/g, '')
+    .replace(/&(#x[\da-f]+|#\d+|amp|lt|gt|quot|apos|nbsp);/gi, (_, entity) => {
+      if (entity[0] === '#') {
+        const code = entity[1]?.toLowerCase() === 'x' ? Number.parseInt(entity.slice(2), 16) : Number.parseInt(entity.slice(1), 10)
+        return code > 0 && code <= 0x10ffff ? String.fromCodePoint(code) : ''
+      }
+      return { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: ' ' }[entity.toLowerCase()]
+    }).replace(/\n{3,}/g, '\n\n').trim()
+}
+function bodyText(part, mime) {
+  if (part.mimeType === mime && part.body?.data) return decode(part.body.data)
+  return (part.parts || []).map(child => bodyText(child, mime)).find(Boolean) || ''
 }
 
 export function summarizeThread(thread) {
@@ -146,16 +165,42 @@ export function summarizeThread(thread) {
     subject: header(message, 'Subject'),
     date: Number(message.internalDate) || 0,
     sent: (message.labelIds || []).includes('SENT'),
-    body: bodyText(message.payload || {}) || message.snippet || '',
+    draft: (message.labelIds || []).includes('DRAFT'),
+    body: bodyText(message.payload || {}, 'text/plain') || htmlText(bodyText(message.payload || {}, 'text/html')) || message.snippet || '',
     messageId: header(message, 'Message-ID'),
     references: header(message, 'References'),
+    replyTo: header(message, 'Reply-To'),
   }))
   return { id: thread.id, messages }
 }
 
+const address = value => String(value || '').match(/<([^<>\s,]+@[^<>\s,]+)>/)?.[1] || String(value || '').match(/\b[^\s,<>]+@[^\s,<>]+\.[^\s,<>]+\b/)?.[0] || ''
+export function replyDetails(thread, accountEmail) {
+  const messages = (thread?.messages || []).filter(message => !message.draft)
+  const last = messages.at(-1)
+  const external = [...messages].reverse().map(message => message.sent ? address(message.to) : address(message.replyTo || message.from)).find(email => email && email.toLowerCase() !== accountEmail?.toLowerCase()) || ''
+  return { to: external, subject: last?.subject || '', replyToId: last?.messageId || '', references: last?.references || '' }
+}
+
 const cleanHeader = value => String(value || '').replace(/[\r\n\0]/g, ' ').trim()
 const subjectHeader = value => /^[\x20-\x7e]*$/.test(value) ? value : `=?UTF-8?B?${Buffer.from(value).toString('base64')}?=`
-export function makeMessage({ from, to, subject, body, threadId, replyToId, references }) {
+const wrapBase64 = value => value.match(/.{1,76}/g)?.join('\r\n') || ''
+function normalizeAttachments(input) {
+  if (input == null) return []
+  if (!Array.isArray(input) || input.length > 10) throw Object.assign(new Error('Choose up to 10 attachments.'), { status: 400 })
+  let total = 0
+  return input.map(item => {
+    if (!item || typeof item.name !== 'string' || typeof item.data !== 'string') throw Object.assign(new Error('Invalid attachment.'), { status: 400 })
+    const name = item.name.replace(/[\r\n\0\\/]/g, '_').trim()
+    if (!name || name.length > 150 || !item.data || !/^(?:[A-Za-z\d+/]{4})*(?:[A-Za-z\d+/]{2}==|[A-Za-z\d+/]{3}=)?$/.test(item.data)) throw Object.assign(new Error('Invalid attachment name or content.'), { status: 400 })
+    const data = Buffer.from(item.data, 'base64')
+    total += data.length
+    if (total > 2.5 * 1024 * 1024) throw Object.assign(new Error('Attachments must total 2.5 MB or less.'), { status: 400 })
+    const type = typeof item.type === 'string' && /^[\w!#$&^.+-]+\/[\w!#$&^.+-]+$/.test(item.type) ? item.type : 'application/octet-stream'
+    return { name, type, data: data.toString('base64') }
+  })
+}
+export function makeMessage({ from, to, subject, body, attachments, threadId, replyToId, references }) {
   from = cleanHeader(from)
   to = cleanHeader(to)
   subject = cleanHeader(subject)
@@ -163,11 +208,26 @@ export function makeMessage({ from, to, subject, body, threadId, replyToId, refe
   if (!/^[^\s@<>]+@[^\s@<>]+\.[^\s@<>]+$/.test(to)) throw Object.assign(new Error('Enter one valid recipient email address.'), { status: 400 })
   if (!subject || subject.length > 250) throw Object.assign(new Error('Enter a subject under 250 characters.'), { status: 400 })
   if (typeof body !== 'string' || !body.trim() || body.length > 100_000) throw Object.assign(new Error('Enter an email body under 100,000 characters.'), { status: 400 })
-  const lines = [`From: ${from}`, `To: ${to}`, `Subject: ${subjectHeader(subject)}`, 'MIME-Version: 1.0', 'Content-Type: text/plain; charset=UTF-8', 'Content-Transfer-Encoding: base64']
+  const files = normalizeAttachments(attachments)
+  const lines = [`From: ${from}`, `To: ${to}`, `Subject: ${subjectHeader(subject)}`, 'MIME-Version: 1.0']
   if (threadId && replyToId) {
     lines.push(`In-Reply-To: ${cleanHeader(replyToId)}`)
     lines.push(`References: ${cleanHeader(`${references || ''} ${replyToId}`).slice(-900)}`)
   }
-  const encodedBody = Buffer.from(body.replace(/\r?\n/g, '\r\n'), 'utf8').toString('base64').match(/.{1,76}/g)?.join('\r\n') || ''
-  return { raw: Buffer.from(`${lines.join('\r\n')}\r\n\r\n${encodedBody}\r\n`, 'utf8').toString('base64url'), ...(threadId && replyToId ? { threadId } : {}) }
+  const encodedBody = wrapBase64(Buffer.from(body.replace(/\r?\n/g, '\r\n'), 'utf8').toString('base64'))
+  let mime
+  if (!files.length) {
+    lines.push('Content-Type: text/plain; charset=UTF-8', 'Content-Transfer-Encoding: base64')
+    mime = `${lines.join('\r\n')}\r\n\r\n${encodedBody}\r\n`
+  } else {
+    const boundary = `cp_${randomBytes(18).toString('hex')}`
+    lines.push(`Content-Type: multipart/mixed; boundary="${boundary}"`)
+    const parts = [`--${boundary}\r\nContent-Type: text/plain; charset=UTF-8\r\nContent-Transfer-Encoding: base64\r\n\r\n${encodedBody}\r\n`]
+    for (const file of files) {
+      const fallback = file.name.replace(/[^\x20-\x7e]|["\\]/g, '_')
+      parts.push(`--${boundary}\r\nContent-Type: ${file.type}; name="${fallback}"\r\nContent-Disposition: attachment; filename="${fallback}"; filename*=UTF-8''${encodeURIComponent(file.name)}\r\nContent-Transfer-Encoding: base64\r\n\r\n${wrapBase64(file.data)}\r\n`)
+    }
+    mime = `${lines.join('\r\n')}\r\n\r\n${parts.join('')}--${boundary}--\r\n`
+  }
+  return { raw: Buffer.from(mime, 'utf8').toString('base64url'), ...(threadId && replyToId ? { threadId } : {}) }
 }

@@ -1,8 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
-import { Archive, ArrowDownUp, CalendarDays, ChevronDown, ChevronLeft, ChevronRight, CircleAlert, Clock3, ExternalLink, Inbox, LayoutDashboard, Menu, Pencil, RefreshCw, Search, Send, SlidersHorizontal, Video, Wallet, X } from 'lucide-react'
+import { Archive, ArrowDownUp, CalendarDays, ChevronDown, ChevronLeft, ChevronRight, CircleAlert, Clock3, ExternalLink, Inbox, LayoutDashboard, Menu, Paperclip, Pencil, RefreshCw, Search, Send, SlidersHorizontal, Video, Wallet, X } from 'lucide-react'
 import { api, age, BOARD_GROUPS, CLOSED, datePart, dayDiff, deadlineValue, FOLLOW_UP_STATUS, formatDate, formatTime, inGroup, isLive, isOverdue, isSoon, isStale, LIVE_GROUPS, PLATFORMS, searchDeals, sortDeals, sourceOf, SOURCE_COLORS, SOURCES, STATUSES, toDateInput, toTimeInput, TYPE_COLORS, TYPES, today } from './model.js'
+import { EMAIL_TEMPLATES, hasTemplateFields } from './emailTemplates.js'
+import { getMediaKit, removeMediaKit, saveMediaKit } from './mediaKit.js'
 
 const savedView = (() => { try { return JSON.parse(localStorage.getItem('cp-view') || '{}') } catch { return {} } })()
 const initialView = { board: savedView.board === 'live' ? 'live' : 'ugc', stage: '', sort: savedView.sort || 'last', hideEmpty: !!savedView.hideEmpty, collapsed: savedView.collapsed || [], sidebar: savedView.sidebar !== false }
@@ -61,61 +63,132 @@ function Calendar({ deals, month, setMonth, onOpen, ready }) {
   </section>
 }
 
-function GmailPanel({ deal }) {
+const MAX_ATTACHMENT_BYTES = 2.5 * 1024 * 1024
+const MAX_ATTACHMENTS = 10
+const formatSize = bytes => bytes < 1024 * 1024 ? `${Math.ceil(bytes / 1024)} KB` : `${(bytes / 1024 / 1024).toFixed(1)} MB`
+
+function AttachmentPicker({ files, mediaKit, onAdd, onRemove, disabled }) {
+  return <details className="rounded-lg border border-base-300"><summary className="flex cursor-pointer list-none items-center gap-2 p-2 text-xs font-semibold"><Paperclip size={14} />Attachments{files.length ? ` · ${files.length}` : ''}<ChevronDown size={13} className="ml-auto" /></summary>
+    <div className="space-y-2 border-t border-base-300 p-2">{mediaKit && <button type="button" className="btn btn-outline btn-sm w-full justify-start" disabled={disabled} onClick={() => onAdd([mediaKit])}><Paperclip size={14} />Attach saved media kit · {mediaKit.name}</button>}<label className="flex min-h-20 cursor-pointer flex-col items-center justify-center rounded-lg border border-dashed border-base-300 bg-base-200/50 p-3 text-center text-xs hover:bg-base-200" onDragOver={event => event.preventDefault()} onDrop={event => { event.preventDefault(); if (!disabled) onAdd(event.dataTransfer.files) }}><Paperclip size={16} /><span className="mt-1">Drop files here or click to choose</span><span className="mt-0.5 opacity-60">PDFs, PR kits and other files · 2.5 MB total</span><input type="file" multiple className="sr-only" disabled={disabled} onChange={event => { onAdd(event.target.files); event.target.value = '' }} /></label>
+      {files.length > 0 && <ul className="space-y-1">{files.map((file, index) => <li key={`${file.name}-${file.lastModified}-${index}`} className="flex items-center gap-2 rounded bg-base-200 px-2 py-1 text-xs"><span className="min-w-0 flex-1 truncate" title={file.name}>{file.name}</span><span className="opacity-55">{formatSize(file.size)}</span><button type="button" className="btn btn-ghost btn-square btn-xs" aria-label={`Remove ${file.name}`} disabled={disabled} onClick={() => onRemove(index)}><X size={13} /></button></li>)}</ul>}
+    </div>
+  </details>
+}
+
+function encodeAttachment(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => resolve({ name: file.name, type: file.type || 'application/octet-stream', data: String(reader.result).split(',')[1] || '' })
+    reader.onerror = () => reject(new Error(`Could not read ${file.name}.`))
+    reader.readAsDataURL(file)
+  })
+}
+
+function GmailPanel({ deal, onLinked }) {
   const [status, setStatus] = useState(null)
   const [thread, setThread] = useState(null)
+  const threadRef = useRef(null)
+  const [linkInput, setLinkInput] = useState('')
+  const [linking, setLinking] = useState(false)
   const [form, setForm] = useState({ to: '', subject: '', body: '' })
+  const [attachments, setAttachments] = useState([])
+  const [mediaKit, setMediaKit] = useState(null)
+  const [kitBusy, setKitBusy] = useState(false)
   const [draftId, setDraftId] = useState(null)
   const [busy, setBusy] = useState('')
   const [message, setMessage] = useState('')
+  useEffect(() => { let active = true; getMediaKit().then(file => { if (active) setMediaKit(file) }).catch(error => { if (active) setMessage(`Could not load the saved media kit: ${error.message}`) }); return () => { active = false } }, [])
+  useEffect(() => { if (threadRef.current && thread?.messages?.length) threadRef.current.scrollTop = threadRef.current.scrollHeight }, [thread])
   useEffect(() => {
     let active = true
-    setStatus(null); setThread(null); setDraftId(null); setMessage(''); setForm({ to: '', subject: '', body: '' })
+    setStatus(null); setThread(null); setDraftId(null); setMessage(''); setForm({ to: '', subject: '', body: '' }); setAttachments([])
     api('/gmail/status').then(async value => {
       if (!active) return
       setStatus(value)
-      if (!value.connected) return
+      if (!value.connected || !deal.gmail) return
       const result = await api(`${apiPath(deal.id)}/gmail`)
       if (!active) return
       setThread(result.thread)
-      const last = result.thread?.messages?.at(-1)
-      const recipient = last?.sent ? last.to : last?.from
-      setForm({ to: recipient?.match(/<([^<>]+@[^<>]+)>/)?.[1] || recipient || '', subject: last?.subject || '', body: '' })
+      setForm({ to: result.reply?.to || '', subject: result.reply?.subject || '', body: '' })
     }).catch(error => { if (active) { setStatus(previous => previous || { configured: false, connected: false }); setMessage(error.message) } })
     return () => { active = false }
-  }, [deal.id])
+  }, [deal.id, deal.gmail])
+  const linkThread = async event => {
+    event.preventDefault()
+    setBusy('link'); setMessage('')
+    try {
+      const result = await api(`${apiPath(deal.id)}/gmail/link`, { method: 'POST', body: JSON.stringify({ url: linkInput.trim() }) })
+      setLinkInput('')
+      setLinking(false)
+      onLinked(result.deal)
+    } catch (error) { setMessage(error.message) }
+    finally { setBusy('') }
+  }
   const act = async action => {
-    if (action === 'send' && !window.confirm(`Send this email to ${form.to}?`)) return
+    if (action === 'send' && hasTemplateFields(form.body)) { setMessage('Replace the [bracketed details] before sending.'); return }
+    if (action === 'send' && !window.confirm(`Send this email to ${form.to}${attachments.length ? ` with ${attachments.length} attachment${attachments.length === 1 ? '' : 's'}` : ''}?`)) return
     setBusy(action); setMessage('')
     try {
-      const result = await api(`${apiPath(deal.id)}/gmail/${action}`, { method: 'POST', body: JSON.stringify({ ...form, draftId }) })
+      const files = await Promise.all(attachments.map(encodeAttachment))
+      const result = await api(`${apiPath(deal.id)}/gmail/${action}`, { method: 'POST', body: JSON.stringify({ ...form, draftId, attachments: files }) })
       setMessage(action === 'draft' ? 'Draft saved in Gmail.' : 'Email sent through Gmail.')
       if (action === 'draft') setDraftId(result.id)
       if (action === 'send') {
         setDraftId(null)
+        setAttachments([])
         setForm(previous => ({ ...previous, body: '' }))
         const result = await api(`${apiPath(deal.id)}/gmail`)
         setThread(result.thread)
+        setForm(previous => ({ ...previous, to: result.reply?.to || previous.to, subject: result.reply?.subject || previous.subject }))
       }
     } catch (error) { setMessage(error.message) }
     finally { setBusy('') }
   }
+  const applyTemplate = template => {
+    if (form.body.trim() && !window.confirm('Replace the current message with this template?')) return
+    setForm(previous => ({ ...previous, body: template.body(deal.brand) }))
+  }
+  const addAttachments = selected => {
+    const incoming = Array.from(selected || [])
+    const next = [...attachments, ...incoming.filter(file => !attachments.some(current => current.name === file.name && current.size === file.size && current.lastModified === file.lastModified))]
+    if (next.length > MAX_ATTACHMENTS) { setMessage(`Choose up to ${MAX_ATTACHMENTS} attachments.`); return }
+    if (next.reduce((total, file) => total + file.size, 0) > MAX_ATTACHMENT_BYTES) { setMessage('Attachments must total 2.5 MB or less.'); return }
+    setAttachments(next); setMessage('')
+  }
+  const saveKit = async selected => {
+    const file = selected?.[0]
+    if (!file) return
+    if (file.size > MAX_ATTACHMENT_BYTES) { setMessage('The media kit must be 2.5 MB or less.'); return }
+    setKitBusy(true); setMessage('')
+    try { await saveMediaKit(file); setMediaKit(file); setMessage('Media kit saved on this device.') }
+    catch (error) { setMessage(`Could not save the media kit: ${error.message}`) }
+    finally { setKitBusy(false) }
+  }
+  const clearKit = async () => {
+    setKitBusy(true); setMessage('')
+    try { await removeMediaKit(); setMediaKit(null); setMessage('Saved media kit removed from this device.') }
+    catch (error) { setMessage(`Could not remove the media kit: ${error.message}`) }
+    finally { setKitBusy(false) }
+  }
   const disconnect = async () => {
     setBusy('disconnect'); setMessage('')
-    try { await api('/gmail/disconnect', { method: 'POST' }); setStatus(previous => ({ ...previous, connected: false })); setThread(null); setDraftId(null); setForm({ to: '', subject: '', body: '' }) }
+    try { await api('/gmail/disconnect', { method: 'POST' }); setStatus(previous => ({ ...previous, connected: false })); setThread(null); setDraftId(null); setForm({ to: '', subject: '', body: '' }); setAttachments([]) }
     catch (error) { setMessage(error.message) }
     finally { setBusy('') }
   }
+  const latestMessageId = [...(thread?.messages || [])].reverse().find(mail => !mail.draft)?.id || thread?.messages?.at(-1)?.id
   return <section className="space-y-3"><div className="flex items-center justify-between"><h3 className="section-title">Gmail conversation</h3>{status?.connected && <span className="badge badge-success badge-soft badge-sm">{status.email || 'Connected'}</span>}</div>
-    {!status ? <span className="loading loading-spinner loading-sm" /> : !status.configured ? <p className="text-sm text-base-content/60">Gmail setup is needed before you can read or reply here.</p> : !status.connected ? <div className="space-y-2"><p className="text-sm text-base-content/60">Connect your Google account to read this thread, save drafts and send replies.</p><a className="btn btn-primary btn-sm" href="/api/gmail/auth/start">Connect Gmail</a></div> : <>
-      {thread?.messages?.length ? <div className="max-h-80 space-y-2 overflow-y-auto rounded-xl border border-base-300 p-2">{thread.messages.map(mail => <details key={mail.id} className="rounded-lg bg-base-200 p-3 text-xs"><summary className="cursor-pointer font-semibold">{mail.from} <span className="float-right font-normal opacity-55">{mail.date ? new Date(mail.date).toLocaleDateString('en-SG') : ''}</span></summary><p className="mt-1 opacity-60">To: {mail.to}</p><p className="mt-2 whitespace-pre-wrap break-words leading-relaxed">{mail.body}</p></details>)}</div> : <p className="text-sm text-base-content/55">No messages found in the linked thread.</p>}
-      <div className="space-y-2 rounded-xl border border-base-300 p-3"><h4 className="text-sm font-semibold">Reply</h4><label className="block text-xs">To<input className="input input-bordered mt-1 w-full" type="email" value={form.to} onChange={event => setForm({ ...form, to: event.target.value })} /></label><label className="block text-xs">Subject<input className="input input-bordered mt-1 w-full" value={form.subject} readOnly /></label><label className="block text-xs">Message<textarea className="textarea textarea-bordered mt-1 min-h-32 w-full" value={form.body} onChange={event => setForm({ ...form, body: event.target.value })} /></label><div className="flex gap-2"><button className="btn btn-outline btn-sm" disabled={!!busy || !form.to || !form.body.trim()} onClick={() => act('draft')}>Save draft</button><button className="btn btn-primary btn-sm" disabled={!!busy || !form.to || !form.body.trim()} onClick={() => act('send')}>Send email</button></div></div>
+    <details className="rounded-lg border border-base-300 p-2"><summary className="cursor-pointer text-xs font-semibold">Saved media kit{mediaKit ? ` · ${mediaKit.name}` : ''}</summary><div className="mt-2 space-y-2 text-xs"><p className="text-base-content/60">Save one media kit on this device to attach it quickly to future replies.</p>{mediaKit && <p className="truncate" title={mediaKit.name}>{mediaKit.name} · {formatSize(mediaKit.size)}</p>}<div className="flex flex-wrap gap-2"><label className="btn btn-outline btn-xs">{mediaKit ? 'Replace media kit' : 'Choose media kit'}<input type="file" className="sr-only" disabled={kitBusy} onChange={event => { saveKit(event.target.files); event.target.value = '' }} /></label>{mediaKit && <button type="button" className="btn btn-ghost btn-xs" disabled={kitBusy} onClick={clearKit}>Remove saved kit</button>}</div></div></details>
+    {!status ? <span className="loading loading-spinner loading-sm" /> : !status.configured ? <p className="text-sm text-base-content/60">Gmail setup is needed before you can read or reply here.</p> : !status.connected ? <div className="space-y-2"><p className="text-sm text-base-content/60">Connect your Google account to read this thread, save drafts and send replies.</p><a className="btn btn-primary btn-sm" href="/api/gmail/auth/start">Connect Gmail</a></div> : !deal.gmail || linking ? <form onSubmit={linkThread} className="space-y-2"><p className="text-sm text-base-content/60">Paste the Gmail conversation link or thread ID to attach all its messages to this Notion deal.</p><label className="block text-xs">Gmail conversation<input className="input input-bordered mt-1 w-full" type="text" value={linkInput} onChange={event => setLinkInput(event.target.value)} placeholder="Gmail conversation URL or thread ID" /></label><div className="flex gap-2"><button className="btn btn-primary btn-sm" disabled={!!busy || !linkInput.trim()} type="submit">{deal.gmail ? 'Replace conversation' : 'Link conversation'}</button>{deal.gmail && <button className="btn btn-ghost btn-sm" type="button" onClick={() => setLinking(false)}>Cancel</button>}</div></form> : <>
+      <button className="btn btn-ghost btn-xs" type="button" onClick={() => setLinking(true)}>Change conversation</button>
+      {thread?.messages?.length ? <div ref={threadRef} className="max-h-80 space-y-2 overflow-y-auto rounded-xl border border-base-300 p-2">{thread.messages.map(mail => <details key={mail.id} open={mail.id === latestMessageId} className="rounded-lg bg-base-200 p-3 text-xs"><summary className="cursor-pointer font-semibold">{mail.from} <span className="float-right font-normal opacity-55">{mail.date ? new Date(mail.date).toLocaleDateString('en-SG') : ''}</span></summary><p className="mt-1 opacity-60">To: {mail.to}</p><p className="mt-2 whitespace-pre-wrap break-words leading-relaxed">{mail.body}</p></details>)}</div> : <p className="text-sm text-base-content/55">No messages found in the linked thread.</p>}
+      <div className="space-y-2 rounded-xl border border-base-300 p-3"><h4 className="text-sm font-semibold">Reply</h4><div><p className="mb-2 text-xs font-semibold">Start from a template</p><div className="flex flex-wrap gap-1.5">{EMAIL_TEMPLATES.map(template => <button key={template.id} type="button" className="btn btn-outline btn-xs" disabled={!!busy} onClick={() => applyTemplate(template)}>{template.label}</button>)}</div><p className="mt-2 text-[11px] text-base-content/55">Review and replace any [bracketed details] before saving a draft.</p></div><label className="block text-xs">To<input className="input input-bordered mt-1 w-full" type="email" value={form.to} onChange={event => setForm({ ...form, to: event.target.value })} /></label><label className="block text-xs">Subject<input className="input input-bordered mt-1 w-full" value={form.subject} readOnly /></label><label className="block text-xs">Message<textarea className="textarea textarea-bordered mt-1 min-h-32 w-full" value={form.body} onChange={event => setForm({ ...form, body: event.target.value })} /></label><AttachmentPicker files={attachments} mediaKit={mediaKit} onAdd={addAttachments} onRemove={index => setAttachments(files => files.filter((_, i) => i !== index))} disabled={!!busy} /><div className="flex gap-2"><button className="btn btn-outline btn-sm" disabled={!!busy || !form.to || !form.body.trim()} onClick={() => act('draft')}>Save draft</button><button className="btn btn-primary btn-sm" disabled={!!busy || !form.to || !form.body.trim()} onClick={() => act('send')}>Send email</button></div></div>
       <button className="btn btn-ghost btn-xs" disabled={!!busy} onClick={disconnect}>Disconnect Gmail</button>
     </>}{message && <p className={`text-sm ${/saved|sent/i.test(message) ? 'text-success' : 'text-error'}`} role="status">{message}</p>}
   </section>
 }
 
-function DealDrawer({ deal, body, bodyError, onClose, onSave }) {
+function DealDrawer({ deal, body, bodyError, onClose, onSave, onLinked }) {
   const [draft, setDraft] = useState(null)
   useEffect(() => setDraft(deal ? { status: deal.status, type: deal.type, fee: deal.fee, next: deal.next, date: toDateInput(deal.deadlineStart), start: toTimeInput(deal.deadlineStart), end: toTimeInput(deal.deadlineEnd) } : null), [deal?.id])
   if (!deal || !draft) return null
@@ -123,7 +196,6 @@ function DealDrawer({ deal, body, bodyError, onClose, onSave }) {
   const saveDeadline = patch => { const updated = { ...draft, ...patch }; setDraft(updated); save('dl', deadlineValue(updated.date, deal.live ? updated.start : '', deal.live ? updated.end : '')) }
   const historyAt = body?.search(/^## Email history\s*$/m) ?? -1
   const notes = historyAt < 0 ? body : body?.slice(0, historyAt)
-  const history = historyAt < 0 ? '' : body?.slice(historyAt)
   return <><div className="fixed inset-0 z-40 bg-black/35" onClick={onClose} /><aside className="fixed inset-y-0 right-0 z-50 flex w-full max-w-xl flex-col bg-base-100 shadow-2xl" role="dialog" aria-modal="true" aria-label={deal.brand}>
     <div className="flex items-start justify-between gap-3 border-b border-base-300 p-5"><div><p className="eyebrow">Collaboration details</p><h2 className="font-display text-2xl font-semibold">{deal.brand}</h2></div><button className="btn btn-ghost btn-square btn-sm" aria-label="Close details" onClick={onClose}><X size={19} /></button></div>
     <div className="flex-1 space-y-5 overflow-y-auto p-5"><div className="grid grid-cols-2 gap-3"><label className="form-control"><span className="label-text mb-1 text-xs font-semibold">Status</span><select className="select select-bordered w-full" value={draft.status} onChange={event => { setDraft({ ...draft, status: event.target.value }); save('status', event.target.value) }}>{STATUSES.map(s => <option key={s.key}>{s.key}</option>)}</select></label><div><span className="mb-1 block text-xs font-semibold">Deal type</span><details className="dropdown w-full"><summary className="btn btn-outline w-full justify-between gap-2 font-normal"><span className="flex min-w-0 flex-wrap gap-1">{draft.type.length ? draft.type.map(type => <span key={type} className={`tone-chip tone-${TYPE_COLORS[type] || 'gray'}`}>{type}</span>) : 'None'}</span><ChevronDown size={14} className="shrink-0" /></summary><div className="dropdown-content z-10 mt-1 w-full rounded-xl border border-base-300 bg-base-100 p-3 shadow-xl">{TYPES.map(type => <label key={type} className="flex cursor-pointer items-center gap-2 py-1 text-sm"><input type="checkbox" className="checkbox checkbox-primary checkbox-xs" checked={draft.type.includes(type)} onChange={() => { const value = draft.type.includes(type) ? draft.type.filter(t => t !== type) : [...draft.type, type]; setDraft({ ...draft, type: value }); save('type', value) }} /><span className={`tone-dot tone-${TYPE_COLORS[type] || 'gray'}`} />{type}</label>)}</div></details></div></div>
@@ -134,8 +206,7 @@ function DealDrawer({ deal, body, bodyError, onClose, onSave }) {
     <div className="grid grid-cols-2 gap-3 rounded-xl bg-base-200 p-4 text-xs"><div><b>Agency / platform</b><p className="mt-1 opacity-65">{deal.agency || '—'}</p></div><div><b>Platforms</b><p className="mt-1 opacity-65">{deal.platforms.join(', ') || '—'}</p></div><div><b>Last activity</b><p className="mt-1 opacity-65">{formatDate(deal.last) || '—'}</p></div><div><b>Last edited</b><p className="mt-1 opacity-65">{deal.edited ? new Date(deal.edited).toLocaleString('en-SG', { timeZone: 'Asia/Singapore', day: 'numeric', month: 'short', year: 'numeric' }) : '—'}</p></div><div><b>Source</b><p className="mt-1 opacity-65">{deal.source}</p></div></div>
     <a className="link link-primary inline-flex items-center gap-1 text-sm" href={deal.url} target="_blank" rel="noopener noreferrer">Open in Notion <ExternalLink size={13} /></a>
     <section><h3 className="section-title mb-2">From the Notion page</h3>{bodyError ? <p className="text-sm text-error">{bodyError}</p> : body == null ? <span className="loading loading-spinner loading-sm" /> : <div className="prose prose-sm max-w-none"><ReactMarkdown remarkPlugins={[remarkGfm]}>{notes?.trim() || 'No notes yet.'}</ReactMarkdown></div>}</section>
-    {deal.gmail && <section><h3 className="section-title mb-2">Email history</h3><div className="prose prose-sm max-w-none"><ReactMarkdown remarkPlugins={[remarkGfm]}>{history || 'No email history on this page yet.'}</ReactMarkdown></div></section>}
-    {deal.gmail && <GmailPanel deal={deal} />}
+    {deal.source === 'Email' && <GmailPanel deal={deal} onLinked={onLinked} />}
     </div></aside></>
 }
 
@@ -253,7 +324,7 @@ export default function App() {
     <Calendar deals={calendarDeals} month={month} setMonth={setMonth} onOpen={setDrawer} ready={load.state === 'ready'} />
     </>}
     </main></div></div>
-    {activeDeal && <DealDrawer deal={activeDeal} body={body} bodyError={bodyError} onClose={() => setDrawer(null)} onSave={save} />}
+    {activeDeal && <DealDrawer deal={activeDeal} body={body} bodyError={bodyError} onClose={() => setDrawer(null)} onSave={save} onLinked={linked => setDeals(items => items.map(item => item.id === linked.id ? { ...linked, live: isLive(linked), source: sourceOf(linked) } : item))} />}
     {drawer === 'log' && <><div className="fixed inset-0 z-40 bg-black/35" onClick={() => setDrawer(null)} /><aside className="fixed inset-y-0 right-0 z-50 w-full max-w-md overflow-y-auto bg-base-100 p-5 shadow-2xl" role="dialog" aria-label="Notion writes"><div className="mb-5 flex items-center justify-between"><h2 className="section-title">Notion writes</h2><button className="btn btn-ghost btn-square btn-sm" onClick={() => setDrawer(null)}><X size={18} /></button></div><p className="mb-5 text-xs text-base-content/60">Every edit is sent to the Collab Tracker page in Notion. Failed changes are undone on the board.</p>{log.length ? log.map(entry => <div key={entry.id} className="mb-3 rounded-xl border border-base-300 p-3 text-sm"><div className="flex justify-between"><b>{entry.brand}</b><span className={`badge badge-sm ${entry.status === 'Failed' ? 'badge-error' : entry.status === 'Saved' ? 'badge-success' : 'badge-warning'}`}>{entry.status}</span></div><p className="mt-1 text-xs opacity-60">{entry.prop} · {entry.at.toLocaleTimeString('en-SG')} · {Array.isArray(entry.value) ? entry.value.join(', ') : typeof entry.value === 'object' ? JSON.stringify(entry.value) : entry.value}</p>{entry.error && <p className="mt-1 text-xs text-error">{entry.error}</p>}</div>) : <p className="text-sm opacity-50">No changes yet.</p>}</aside></>}
     {notice && <div className="toast toast-end z-[60]"><div className="alert alert-error max-w-sm text-sm"><span>{notice}</span><button className="btn btn-ghost btn-xs" aria-label="Dismiss" onClick={() => setNotice('')}><X size={14} /></button></div></div>}
   </div>

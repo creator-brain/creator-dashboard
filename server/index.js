@@ -2,7 +2,7 @@ import express from 'express'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { DATA_SOURCE_ID, notion, pageMarkdown, reconcileFollowUps, updateDeal } from './notion.js'
-import { gmailAuthorize, gmailCallback, gmailConfigured, gmailConnected, gmailDisconnect, gmailRequest, makeMessage, summarizeThread, threadIdFromUrl } from './gmail.js'
+import { gmailAuthorize, gmailCallback, gmailConfigured, gmailConnected, gmailDisconnect, gmailRequest, gmailThreadUrl, makeMessage, replyDetails, summarizeThread, threadIdFromUrl } from './gmail.js'
 
 try {
   const env = readFileSync(resolve('.env'), 'utf8')
@@ -14,7 +14,9 @@ try {
 
 const app = express()
 app.disable('x-powered-by')
-app.use(express.json({ limit: '32kb' }))
+const smallBody = express.json({ limit: '32kb' })
+const emailBody = express.json({ limit: '4.3mb' })
+app.use((req, res, next) => (/^\/api\/deals\/[\da-f-]{32,36}\/gmail\/(draft|send)$/.test(req.path) ? emailBody : smallBody)(req, res, next))
 app.use((req, res, next) => { res.set('Cache-Control', 'no-store'); next() })
 
 app.get('/api/health', (_req, res) => res.json({ configured: Boolean(process.env.NOTION_TOKEN) }))
@@ -47,24 +49,32 @@ app.get('/api/deals/:id/gmail', async (req, res, next) => {
   try {
     const threadId = await linkedThread(req)
     const thread = threadId ? summarizeThread(await gmailRequest(req, `/threads/${encodeURIComponent(threadId)}?format=full`)) : null
-    res.json({ thread })
+    const profile = thread ? await gmailRequest(req, '/profile') : null
+    res.json({ thread, reply: thread ? replyDetails(thread, profile.emailAddress) : null })
+  } catch (error) { next(error) }
+})
+app.post('/api/deals/:id/gmail/link', sameSiteWrite, async (req, res, next) => {
+  try {
+    if (!/^[\da-f-]{32,36}$/i.test(req.params.id)) throw Object.assign(new Error('Invalid page ID.'), { status: 400 })
+    const input = String(req.body?.url || '').trim()
+    const threadId = threadIdFromUrl(input)
+    if (!threadId) throw Object.assign(new Error('Paste a Gmail conversation link or thread ID.'), { status: 400 })
+    const thread = summarizeThread(await gmailRequest(req, `/threads/${encodeURIComponent(threadId)}?format=full`))
+    if (!thread.messages.length) throw Object.assign(new Error('No messages were found in this Gmail conversation.'), { status: 400 })
+    const today = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Singapore' })
+    const deal = await updateDeal(req.params.id, { prop: 'gmail', value: input.startsWith('https://mail.google.com/') ? input : gmailThreadUrl(threadId) }, today)
+    res.json({ deal })
   } catch (error) { next(error) }
 })
 async function emailAction(req, res, next, action) {
   try {
     const threadId = await linkedThread(req)
     if (!threadId) throw Object.assign(new Error('This deal has no linked Gmail thread.'), { status: 400 })
-    let replyToId = '', references = '', subject = req.body?.subject
-    if (threadId) {
-      const thread = summarizeThread(await gmailRequest(req, `/threads/${encodeURIComponent(threadId)}?format=metadata`))
-      const last = thread.messages.at(-1)
-      replyToId = last?.messageId || ''
-      references = last?.references || ''
-      subject = last?.subject || subject
-      if (!replyToId) throw Object.assign(new Error('The linked Gmail thread has no Message-ID to reply to.'), { status: 400 })
-    }
     const profile = await gmailRequest(req, '/profile')
-    const message = makeMessage({ from: profile.emailAddress, to: req.body?.to, subject, body: req.body?.body, threadId, replyToId, references })
+    const thread = summarizeThread(await gmailRequest(req, `/threads/${encodeURIComponent(threadId)}?format=metadata`))
+    const reply = replyDetails(thread, profile.emailAddress)
+    if (!reply.replyToId) throw Object.assign(new Error('The linked Gmail thread has no Message-ID to reply to.'), { status: 400 })
+    const message = makeMessage({ from: profile.emailAddress, to: req.body?.to, subject: reply.subject, body: req.body?.body, attachments: req.body?.attachments, threadId, replyToId: reply.replyToId, references: reply.references })
     const draftId = req.body?.draftId
     if (draftId && (typeof draftId !== 'string' || !/^[a-zA-Z0-9_-]{8,128}$/.test(draftId))) throw Object.assign(new Error('Invalid Gmail draft ID.'), { status: 400 })
     if (draftId) {

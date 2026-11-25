@@ -113,6 +113,7 @@ export function updateProperties(change, today) {
     case 'fee': properties.Fee = { rich_text: change.value ? rich(change.value) : [] }; break
     case 'next': properties['Next Step'] = { rich_text: change.value ? rich(change.value) : [] }; break
     case 'dl': properties.Deadline = dateProperty(change.value); break
+    case 'gmail': properties['Gmail Thread'] = { url: change.value }; break
     default: throw Object.assign(new Error('Unsupported property'), { status: 400 })
   }
   return properties

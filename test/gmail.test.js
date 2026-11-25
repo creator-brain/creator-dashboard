@@ -1,11 +1,15 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { makeMessage, summarizeThread, threadIdFromUrl } from '../server/gmail.js'
+import { gmailThreadUrl, makeMessage, replyDetails, summarizeThread, threadIdFromUrl } from '../server/gmail.js'
 
 test('accepts only Gmail thread links', () => {
   assert.equal(threadIdFromUrl('https://mail.google.com/mail/u/0/#all/18c9b10f0a123456'), '18c9b10f0a123456')
   assert.equal(threadIdFromUrl('https://example.com/#all/18c9b10f0a123456'), '')
+  assert.equal(threadIdFromUrl('http://mail.google.com/mail/u/0/#all/18c9b10f0a123456'), '')
   assert.equal(threadIdFromUrl('https://mail.google.com/mail/u/0/#all/short'), '')
+  assert.equal(threadIdFromUrl('18c9b10f0a123456'), '18c9b10f0a123456')
+  assert.equal(threadIdFromUrl(gmailThreadUrl('18c9b10f0a123456')), '18c9b10f0a123456')
+  assert.equal(threadIdFromUrl('https://mail.google.com/mail/?authuser=creator%40example.com#all/thread-f:1234567890123456789'), BigInt('1234567890123456789').toString(16))
 })
 
 test('formats a safe threaded plain-text Gmail message', () => {
@@ -21,6 +25,23 @@ test('formats a safe threaded plain-text Gmail message', () => {
   assert.equal(Buffer.from(body, 'base64').toString('utf8'), 'Hello\r\nBrand')
 })
 
+test('includes a PDF attachment in the threaded MIME message', () => {
+  const bytes = Buffer.from('%PDF-1.7\nexample')
+  const message = makeMessage({ from: 'creator@example.com', to: 'brand@example.com', subject: 'Re: Brief', body: 'Attached is the PR kit.', threadId: '18c9b10f0a123456', replyToId: '<first@example.com>', attachments: [{ name: 'PR kit.pdf', type: 'application/pdf', data: bytes.toString('base64') }] })
+  const mime = Buffer.from(message.raw, 'base64url').toString('utf8')
+  assert.equal(message.threadId, '18c9b10f0a123456')
+  assert.match(mime, /Content-Type: multipart\/mixed; boundary="cp_[a-f\d]+"/)
+  assert.match(mime, /Content-Disposition: attachment; filename="PR kit.pdf"; filename\*=UTF-8''PR%20kit.pdf/)
+  assert.match(mime, /In-Reply-To: <first@example.com>/)
+  assert.ok(mime.includes(bytes.toString('base64')))
+})
+
+test('rejects oversized and malformed attachments', () => {
+  const base = { from: 'creator@example.com', to: 'brand@example.com', subject: 'Brief', body: 'Here it is.' }
+  assert.throws(() => makeMessage({ ...base, attachments: [{ name: 'large.pdf', data: Buffer.alloc(2.5 * 1024 * 1024 + 1).toString('base64') }] }), /2.5 MB/)
+  assert.throws(() => makeMessage({ ...base, attachments: [{ name: 'fake.pdf', data: 'not base64' }] }), /Invalid attachment/)
+})
+
 test('rejects invalid recipients and blank bodies', () => {
   assert.throws(() => makeMessage({ from: 'creator@example.com', to: 'bad', subject: 'Hello', body: 'Text' }), /valid recipient/)
   assert.throws(() => makeMessage({ from: 'creator@example.com', to: 'brand@example.com\r\nBcc: bad@example.com', subject: 'Hello', body: 'Text' }), /valid recipient/)
@@ -33,4 +54,19 @@ test('extracts plain text and reply headers from a Gmail thread', () => {
   assert.equal(result.messages[0].body, 'Hello from brand')
   assert.equal(result.messages[0].messageId, '<m1@example.com>')
   assert.equal(result.messages[0].sent, false)
+})
+
+test('keeps the full body of an HTML-only email as safe text', () => {
+  const body = Buffer.from('<p>Hi &amp; welcome</p><p>Brief attached.</p><script>ignore()</script>').toString('base64url')
+  const thread = summarizeThread({ id: 'thread1', messages: [{ id: 'm1', payload: { mimeType: 'text/html', body: { data: body } } }] })
+  assert.equal(thread.messages[0].body, 'Hi & welcome\nBrief attached.')
+})
+
+test('fills a reply from the latest conversation and external participant', () => {
+  const thread = { messages: [
+    { from: 'Brand <brand@example.com>', to: 'creator@example.com', subject: 'Collaboration', messageId: '<one@example.com>', references: '', sent: false },
+    { from: 'creator@example.com', to: 'Brand <brand@example.com>', subject: 'Collaboration', messageId: '<two@example.com>', references: '<one@example.com>', sent: true },
+    { from: 'creator@example.com', to: 'brand@example.com', subject: 'Collaboration', messageId: '', draft: true },
+  ] }
+  assert.deepEqual(replyDetails(thread, 'creator@example.com'), { to: 'brand@example.com', subject: 'Collaboration', replyToId: '<two@example.com>', references: '<one@example.com>' })
 })
