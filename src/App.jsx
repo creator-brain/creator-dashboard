@@ -1,4 +1,6 @@
 import { IntegrationCard } from "./IntegrationCard.jsx";
+import collabCat from "./assets/collab-cat.png";
+import greetingCat from "./assets/greeting-cat.png";
 import sharkCat from "./assets/shark-cat.svg";
 import {
   InstagramIntegration,
@@ -309,7 +311,7 @@ function SearchBox({ query, setQuery, results, onSelect, ready }) {
                     role="option"
                     aria-selected={highlighted}
                     tabIndex={-1}
-                    className={`flex w-full items-center justify-between gap-3 px-3 py-2.5 text-left ${highlighted ? "bg-primary/10" : "hover:bg-base-200"}`}
+                    className={`flex w-full items-center justify-between gap-3 px-3 py-2.5 text-left ${highlighted ? "bg-secondary/20" : "hover:bg-base-200"}`}
                     onMouseDown={(event) => event.preventDefault()}
                     onClick={() => pickDeal(deal)}
                   >
@@ -428,7 +430,11 @@ function SearchResults({ query, results, onOpen, ready }) {
         </div>
       ) : (
         <div className="rounded-2xl border border-dashed border-base-300 bg-base-100 px-6 py-14 text-center">
-          <img src={sharkCat} alt="" className="mx-auto mb-3 size-8 opacity-85" />
+          <img
+            src={sharkCat}
+            alt=""
+            className="mx-auto mb-3 size-8 opacity-85"
+          />
           <b>0 matches</b>
           <p className="mt-1 text-sm text-base-content/55">
             Try another brand or keyword.
@@ -1235,7 +1241,8 @@ function IntegrationsDrawer({ onClose, onInstagramUnlocked }) {
           <div>
             <p className="eyebrow">Workspace</p>
             <h2 className="section-title mt-1 flex items-center gap-2">
-              Integrations <img src={sharkCat} alt="" className="size-6 opacity-85" />
+              Integrations{" "}
+              <img src={sharkCat} alt="" className="size-6 opacity-85" />
             </h2>
             <p className="mt-1 text-sm text-base-content/55">
               Connect the places where brand conversations happen.
@@ -1347,9 +1354,9 @@ function DealDrawer({
         aria-label={deal.brand}
       >
         <div className="flex items-start justify-between gap-3 border-b border-base-300 p-5">
-          <div>
+          <div className="min-w-0">
             <p className="eyebrow">Collaboration details</p>
-            <h2 className="font-display text-2xl font-semibold">
+            <h2 className="break-words font-display text-2xl font-semibold">
               {deal.brand}
             </h2>
           </div>
@@ -1530,6 +1537,13 @@ function DealDrawer({
               <b>Source</b>
               <p className="mt-1 opacity-65">{deal.source}</p>
             </div>
+            <img
+              src={collabCat}
+              alt=""
+              width="56"
+              height="56"
+              className="size-24 self-end justify-self-end object-contain"
+            />
           </div>
           <a
             className="link link-primary inline-flex items-center gap-1 text-sm"
@@ -1822,42 +1836,42 @@ export default function App() {
       label: "Need a first reply",
       icon: Inbox,
       test: (d) => d.status === "New - not replied",
-      tint: "bg-rose-100",
+      tint: "tone-pink",
     },
     {
       key: "action",
       label: "Action needed",
       icon: CircleAlert,
       test: (d) => d.status === "Action needed",
-      tint: "bg-orange-100",
+      tint: "tone-brown",
     },
     {
       key: "overdue",
       label: "Overdue",
       icon: Clock3,
       test: isOverdue,
-      tint: "bg-red-100",
+      tint: "tone-red",
     },
     {
       key: "soon",
       label: "Due in 7 days",
       icon: CalendarDays,
       test: isSoon,
-      tint: "bg-lime-100",
+      tint: "tone-blue",
     },
     {
       key: "stale",
       label: "Gone quiet",
       icon: Send,
       test: isStale,
-      tint: "bg-emerald-100",
+      tint: "tone-gray",
     },
     {
       key: "pay",
       label: "Payment pending",
       icon: Wallet,
       test: (d) => d.status === "Completed - payment pending",
-      tint: "bg-violet-100",
+      tint: "tone-purple",
     },
   ];
   const filterBase = scoped.filter((d) => {
@@ -1923,12 +1937,19 @@ export default function App() {
     setDragId(null);
     if (deal && deal.status !== group.key) save(deal, "status", group.key);
   };
-  const singaporeHour = Number(new Intl.DateTimeFormat("en-SG", {
-    timeZone: "Asia/Singapore",
-    hour: "numeric",
-    hourCycle: "h23",
-  }).format(new Date()));
-  const greeting = singaporeHour < 12 ? "morning" : singaporeHour < 18 ? "afternoon" : "evening";
+  const singaporeHour = Number(
+    new Intl.DateTimeFormat("en-SG", {
+      timeZone: "Asia/Singapore",
+      hour: "numeric",
+      hourCycle: "h23",
+    }).format(new Date()),
+  );
+  const greeting =
+    singaporeHour < 12
+      ? "morning"
+      : singaporeHour < 18
+        ? "afternoon"
+        : "evening";
 
   return (
     <div className="min-h-screen bg-base-200 text-base-content">
@@ -1940,13 +1961,13 @@ export default function App() {
               <img src={sharkCat} alt="" className="size-11 rounded-full" />
             </h1>
             <button
-              className="sidebar-link mb-8 border border-white/15 bg-white/5"
+              className="sidebar-link mb-8 border border-white/25 bg-white/10"
               onClick={() => setDrawer("integrations")}
             >
               <Plug2 size={16} /> Integrations{" "}
               <ChevronRight size={15} className="ml-auto opacity-60" />
             </button>
-            <p className="mb-3 px-3 text-[10px] font-bold uppercase tracking-[.2em] text-white/40">
+            <p className="mb-3 px-3 text-[10px] font-bold uppercase tracking-[.2em] text-primary-content/80">
               Pipeline
             </p>
             <button className="sidebar-link" onClick={() => chooseStage("")}>
@@ -1996,17 +2017,17 @@ export default function App() {
               onClick={() => chooseStage("@archive")}
             >
               <Archive size={16} /> Archive{" "}
-              <span className="ml-auto text-xs text-white/55">
+              <span className="ml-auto text-xs text-primary-content/75">
                 {scoped.filter((d) => CLOSED.has(d.status)).length}
               </span>
             </button>
             <button className="sidebar-link" onClick={() => setDrawer("log")}>
               <ArrowDownUp size={16} /> Notion writes{" "}
-              <span className="ml-auto text-xs text-white/55">
+              <span className="ml-auto text-xs text-primary-content/75">
                 {log.filter((e) => e.status !== "Saved").length}
               </span>
             </button>
-            <div className="mt-auto rounded-xl border border-white/15 bg-white/5 p-3 text-xs leading-relaxed text-white/55">
+            <div className="mt-auto rounded-xl border border-white/15 bg-white/5 p-3 text-xs leading-relaxed text-primary-content/80">
               Changes save to Notion. Your view preferences stay on this device.
             </div>
           </aside>
@@ -2052,15 +2073,39 @@ export default function App() {
             </button>
           </header>
           <main className="mx-auto max-w-[1800px] space-y-7 px-4 py-7 md:px-7">
-            <div>
-              <h1 className="font-display text-3xl font-semibold tracking-tight md:text-4xl">
-                Good {greeting} Yandy.
+            <div className="border-l-4 border-secondary pl-4">
+              <h1 className="flex items-center gap-3 font-display text-3xl font-semibold tracking-tight md:text-4xl">
+                <span>Good {greeting} Yandy</span>
+                <img
+                  src={greetingCat}
+                  alt=""
+                  width="96"
+                  height="96"
+                  className="size-16 shrink-0 object-contain sm:size-24"
+                />
               </h1>
-              <ul className="mt-3 list-disc space-y-1 pl-5 text-sm leading-relaxed text-base-content/75" aria-label="What's new">
-                <li><strong>Find a deal.</strong> Press <kbd className="kbd kbd-xs">⌘K</kbd>, type a brand, then use ↑ or ↓ and Enter to open a match.</li>
-                <li><strong>Filter the board.</strong> Deal type, Platform, and Source show how many deals match each option.</li>
-                <li><strong>Read Instagram DMs.</strong> Unlock the inbox in Integrations, then open an Instagram deal to see its linked conversation.</li>
-                <li><strong>Spot your replies.</strong> Messages from your connected Gmail or Instagram account are highlighted in pink.</li>
+              <ul
+                className="mt-3 list-disc space-y-1 pl-5 text-sm leading-relaxed text-base-content/75"
+                aria-label="What's new"
+              >
+                <li>
+                  <strong>Find a deal.</strong> Press{" "}
+                  <kbd className="kbd kbd-xs">⌘K</kbd>, type a brand, then use ↑
+                  or ↓ and Enter to open a match.
+                </li>
+                <li>
+                  <strong>Filter the board.</strong> Deal type, Platform, and
+                  Source show how many deals match each option.
+                </li>
+                <li>
+                  <strong>Read Instagram DMs.</strong> Unlock the inbox in
+                  Integrations, then open an Instagram deal to see its linked
+                  conversation.
+                </li>
+                <li>
+                  <strong>Spot your replies.</strong> Messages from your
+                  connected Gmail or Instagram account are highlighted in pink.
+                </li>
               </ul>
             </div>
             {load.state === "error" && (
@@ -2120,7 +2165,7 @@ export default function App() {
                         {scoped.filter(isOverdue).length} overdue ·{" "}
                         {scoped.filter(isSoon).length} due this week
                       </b>
-                      <p className="text-xs text-white/65">
+                      <p className="text-xs text-primary-content/85">
                         {
                           scoped.filter((d) => d.status === "New - not replied")
                             .length
@@ -2129,7 +2174,7 @@ export default function App() {
                       </p>
                     </div>
                     <button
-                      className="btn btn-sm border-0 bg-white text-primary"
+                      className="btn btn-secondary btn-sm"
                       onClick={() =>
                         setFilters((previous) => ({
                           ...previous,
