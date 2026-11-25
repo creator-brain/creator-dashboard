@@ -55,7 +55,7 @@ export function InstagramIntegration({ onUnlocked }) {
     name="Instagram"
     icon={Instagram}
     iconStyle="bg-purple-100 text-purple-700"
-    description="Read DMs from linked deals."
+    description="Read DMs from linked deals"
     status={status?.connected ? 'connected' : status?.configured ? 'locked' : status ? 'setup' : error ? 'unavailable' : null}
     action={status?.connected
       ? <button className="btn btn-outline btn-sm" disabled={busy} onClick={disconnect}>{busy ? 'Locking…' : 'Lock Instagram inbox'}</button>

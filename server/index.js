@@ -1,7 +1,7 @@
 import express from 'express'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
-import { DATA_SOURCE_ID, INSTAGRAM_CONVERSATION, instagramContactHandle, instagramConversationId, notion, pageMarkdown, reconcileFollowUps, toDeal, unlinkedInstagramDeals, updateDeal } from './notion.js'
+import { DATA_SOURCE_ID, INSTAGRAM_CONVERSATION, instagramConversationId, instagramLinkHandle, notion, pageMarkdown, reconcileFollowUps, toDeal, unlinkedInstagramDeals, updateDeal } from './notion.js'
 import { normalizeInstagramHandle, sourceOf } from '../src/model.js'
 import { instagramConfigured, instagramConversation, instagramConversations, instagramLock, instagramSession, instagramUnlock, validConversationId } from './instagram.js'
 import { gmailAuthorize, gmailCallback, gmailConfigured, gmailConnected, gmailDisconnect, gmailRequest, gmailThreadUrl, makeMessage, replyDetails, summarizeThread, threadIdFromUrl } from './gmail.js'
@@ -84,7 +84,7 @@ async function instagramDeal(req, res, next) {
   if (page.properties?.[INSTAGRAM_CONVERSATION]?.type !== 'rich_text') return res.status(409).json({ error: `Add a Text property called ${INSTAGRAM_CONVERSATION} to the Notion tracker.` })
   res.locals.deal = deal
   res.locals.conversationId = instagramConversationId(page)
-  res.locals.contactHandle = instagramContactHandle(page)
+  res.locals.contactHandle = instagramLinkHandle(page)
   next()
 }
 

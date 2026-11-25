@@ -86,6 +86,10 @@ test('Instagram inbox unlock gates reads and saves the selected inbox conversati
   assert.deepEqual(await (await request('/pending-links', { headers })).json(), { pending: [{ id: pageId, handle: 'brand' }] })
   page.properties.Contact.rich_text[0].plain_text = 'BrAnD'
   assert.deepEqual(await (await request('/pending-links', { headers })).json(), { pending: [{ id: pageId, handle: 'brand' }] })
+  page.properties.Contact.rich_text = []
+  page.properties[instagramField].rich_text = [{ plain_text: '@BrAnD' }]
+  assert.deepEqual(await (await request('/deals/' + pageId, { headers })).json(), { conversation: null })
+  assert.deepEqual(await (await request('/pending-links', { headers })).json(), { pending: [{ id: pageId, handle: 'brand' }] })
   const autoLink = id => request('/deals/' + pageId + '/auto-link', { headers, method: 'POST', body: JSON.stringify({ conversationId: id }) })
   assert.equal((await autoLink('wrong-brand')).status, 409)
   assert.equal((await autoLink(conversationId)).status, 200)

@@ -37,7 +37,9 @@ const text = (page, name) => {
 }
 const multi = (page, name) => (property(page, name).multi_select || []).map(item => item.name)
 
-export const instagramConversationId = page => text(page, INSTAGRAM_CONVERSATION)
+const savedInstagramValue = page => text(page, INSTAGRAM_CONVERSATION).trim()
+const misplacedInstagramHandle = page => savedInstagramValue(page).match(/^@([\w.]{1,30})$/)?.[1] || ''
+export const instagramConversationId = page => misplacedInstagramHandle(page) ? '' : savedInstagramValue(page)
 export function instagramContactHandle(page) {
   const contact = property(page, 'Contact')
   const value = (text(page, 'Contact') || contact.url || contact.email || '').trim()
@@ -46,6 +48,7 @@ export function instagramContactHandle(page) {
     || text(page, 'Instagram Handle').trim().match(/^@?([\w.]{1,30})$/)?.[1]
   return handle ? normalizeInstagramHandle(handle) : ''
 }
+export const instagramLinkHandle = page => instagramContactHandle(page) || normalizeInstagramHandle(misplacedInstagramHandle(page))
 
 export function toDeal(page) {
   const date = property(page, 'Deadline').date || {}
@@ -93,10 +96,13 @@ export async function unlinkedInstagramDeals() {
     throw Object.assign(new Error(`Add a Text property called ${INSTAGRAM_CONVERSATION} to the Notion tracker.`), { status: 409 })
   }
   const pending = []
-  const filter = { property: INSTAGRAM_CONVERSATION, rich_text: { is_empty: true } }
+  const filter = { or: [
+    { property: INSTAGRAM_CONVERSATION, rich_text: { is_empty: true } },
+    { property: INSTAGRAM_CONVERSATION, rich_text: { starts_with: '@' } },
+  ] }
   for await (const page of trackerPages(filter)) {
     if (sourceOf(toDeal(page)) !== 'Instagram' || instagramConversationId(page)) continue
-    const handle = instagramContactHandle(page)
+    const handle = instagramLinkHandle(page)
     if (handle) pending.push({ id: page.id, handle })
   }
   return pending
@@ -159,7 +165,7 @@ export async function updateDeal(id, change) {
   }
   if (change.instagramHandle) {
     const current = toDeal(page)
-    if (current.instagramLinked || sourceOf(current) !== 'Instagram' || instagramContactHandle(page) !== change.instagramHandle) return current
+    if (current.instagramLinked || sourceOf(current) !== 'Instagram' || instagramLinkHandle(page) !== change.instagramHandle) return current
   }
   const properties = updateProperties(change)
   if (change.activityDate) {

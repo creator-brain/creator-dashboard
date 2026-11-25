@@ -32,7 +32,6 @@ import {
   Send,
   SlidersHorizontal,
   Video,
-  Wallet,
   X,
 } from "lucide-react";
 import {
@@ -164,6 +163,7 @@ function DealSkeletons() {
 function SearchBox({ query, setQuery, results, onSelect, ready }) {
   const [showSuggestions, setShowSuggestions] = useState(false);
   const [highlightedId, setHighlightedId] = useState(null);
+  const [showAura, setShowAura] = useState(false);
   const inputRef = useRef(null);
   const expanded = Boolean(query.trim()) && showSuggestions;
   const highlightedIndex =
@@ -173,6 +173,7 @@ function SearchBox({ query, setQuery, results, onSelect, ready }) {
   const optionId = (index) => `search-deal-option-${index}`;
 
   useEffect(() => {
+    let auraTimer;
     function focusSearch(event) {
       if (
         !(event.metaKey || event.ctrlKey) ||
@@ -185,9 +186,15 @@ function SearchBox({ query, setQuery, results, onSelect, ready }) {
       onSelect(null);
       inputRef.current?.focus();
       setShowSuggestions(true);
+      setShowAura(true);
+      window.clearTimeout(auraTimer);
+      auraTimer = window.setTimeout(() => setShowAura(false), 2200);
     }
     window.addEventListener("keydown", focusSearch);
-    return () => window.removeEventListener("keydown", focusSearch);
+    return () => {
+      window.removeEventListener("keydown", focusSearch);
+      window.clearTimeout(auraTimer);
+    };
   }, [onSelect]);
 
   useEffect(() => {
@@ -237,49 +244,57 @@ function SearchBox({ query, setQuery, results, onSelect, ready }) {
     <div
       className="relative w-full max-w-md"
       onBlur={(event) => {
-        if (!event.currentTarget.contains(event.relatedTarget))
+        if (!event.currentTarget.contains(event.relatedTarget)) {
           closeSuggestions();
+          setShowAura(false);
+        }
       }}
     >
-      <div className="input input-bordered flex h-10 w-full items-center gap-2 bg-base-100">
-        <Search size={16} className="shrink-0 opacity-40" aria-hidden="true" />
-        <input
-          ref={inputRef}
-          type="text"
-          role="combobox"
-          aria-autocomplete="list"
-          aria-keyshortcuts="Meta+K Control+K"
-          className="min-w-0 grow text-sm"
-          placeholder="Search all brands and deals…"
-          aria-label="Search all deals"
-          aria-expanded={expanded}
-          aria-controls={expanded ? "search-suggestions" : undefined}
-          aria-activedescendant={
-            highlightedIndex >= 0 ? optionId(highlightedIndex) : undefined
-          }
-          value={query}
-          onFocus={() => setShowSuggestions(true)}
-          onChange={(event) => {
-            setQuery(event.target.value);
-            setHighlightedId(null);
-            setShowSuggestions(true);
-          }}
-          onKeyDown={handleSearchKey}
-        />
-        {query && (
-          <button
-            type="button"
-            className="btn btn-ghost btn-square btn-xs"
-            aria-label="Clear search"
-            onClick={() => {
-              setQuery("");
-              closeSuggestions();
-              inputRef.current?.focus();
+      <div className={`block w-full p-0.5 ${showAura ? "aura aura-rainbow motion-reduce:animate-none" : ""}`}>
+        <div className={`input input-bordered flex h-10 w-full items-center gap-2 bg-base-100 ${showAura ? "focus-within:-outline-offset-2" : ""}`}>
+          <Search size={16} className="shrink-0 opacity-40" aria-hidden="true" />
+          <input
+            ref={inputRef}
+            type="text"
+            role="combobox"
+            aria-autocomplete="list"
+            aria-keyshortcuts="Meta+K Control+K"
+            className="min-w-0 grow text-sm"
+            placeholder="Search all brands and deals…"
+            aria-label="Search all deals"
+            aria-expanded={expanded}
+            aria-controls={expanded ? "search-suggestions" : undefined}
+            aria-activedescendant={
+              highlightedIndex >= 0 ? optionId(highlightedIndex) : undefined
+            }
+            value={query}
+            onFocus={() => setShowSuggestions(true)}
+            onChange={(event) => {
+              setQuery(event.target.value);
+              setHighlightedId(null);
+              setShowSuggestions(true);
             }}
-          >
-            <X size={14} />
-          </button>
-        )}
+            onKeyDown={handleSearchKey}
+          />
+          {query ? (
+            <button
+              type="button"
+              className="btn btn-ghost btn-square btn-xs"
+              aria-label="Clear search"
+              onClick={() => {
+                setQuery("");
+                closeSuggestions();
+                inputRef.current?.focus();
+              }}
+            >
+              <X size={14} />
+            </button>
+          ) : (
+            <kbd aria-hidden="true" className="kbd kbd-sm hidden shrink-0 whitespace-nowrap sm:inline-flex">
+              {/Mac/.test(navigator.platform) ? "⌘ K" : "Ctrl K"}
+            </kbd>
+          )}
+        </div>
       </div>
       {expanded && (
         <div className="absolute left-0 right-0 top-full z-40 mt-2 overflow-hidden rounded-xl border border-base-300 bg-base-100 shadow-xl">
@@ -534,6 +549,8 @@ function DealCard({ deal, onOpen, onDrag }) {
 }
 
 function Calendar({ deals, month, setMonth, onOpen, ready }) {
+  const [previewDate, setPreviewDate] = useState(null);
+  const previewDialog = useRef(null);
   const year = month.getFullYear(),
     index = month.getMonth();
   const first = new Date(year, index, 1);
@@ -557,6 +574,14 @@ function Calendar({ deals, month, setMonth, onOpen, ready }) {
     });
   const iso = (date) =>
     `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+  const todayKey = today();
+  const sortedEvents = (key) => [...(byDate.get(key) || [])].sort((a, b) =>
+    a.deadlineStart.localeCompare(b.deadlineStart) || a.brand.localeCompare(b.brand),
+  );
+  const dayLabel = (date) => date.toLocaleDateString("en-SG", {
+    weekday: "long", day: "numeric", month: "long", year: "numeric",
+  });
+  const previewEvents = previewDate ? sortedEvents(iso(previewDate)) : [];
   return (
     <section className="rounded-2xl border border-base-300 bg-base-100 p-4 shadow-sm md:p-5">
       <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
@@ -608,41 +633,76 @@ function Calendar({ deals, month, setMonth, onOpen, ready }) {
         ))}
         {dates.map((date) => {
           const key = iso(date),
-            events = byDate.get(key) || [];
+            events = sortedEvents(key);
           return (
-            <div
+            <button
               key={key}
-              className={`min-h-21 border-t border-base-200 p-1.5 ${date.getMonth() !== index ? "bg-base-200/40 text-base-content/30" : ""}`}
+              type="button"
+              disabled={!ready}
+              aria-haspopup="dialog"
+              aria-label={`${dayLabel(date)}, ${events.length} ${events.length === 1 ? "deadline" : "deadlines"}`}
+              className={`flex min-h-21 min-w-0 flex-col items-start border-t border-base-200 p-1.5 text-left enabled:hover:bg-base-200/70 focus-visible:z-10 focus-visible:outline-2 focus-visible:outline-primary ${date.getMonth() !== index ? "bg-base-200/40 text-base-content/45" : ""}`}
+              onClick={() => {
+                setPreviewDate(date);
+                previewDialog.current?.showModal();
+              }}
             >
-              <div
-                className={`mb-1 flex h-5 w-5 items-center justify-center rounded-full text-[11px] ${key === today() ? "bg-primary font-bold text-primary-content" : ""}`}
+              <span
+                className={`mb-1 flex h-5 w-5 items-center justify-center rounded-full text-[11px] ${key === todayKey ? "bg-primary font-bold text-primary-content" : ""}`}
               >
                 {date.getDate()}
-              </div>
-              {events
-                .sort((a, b) =>
-                  (a.deadlineStart || "").localeCompare(b.deadlineStart || ""),
-                )
-                .slice(0, 3)
-                .map((deal) => (
-                  <button
+              </span>
+              {events.slice(0, 3).map((deal) => (
+                  <span
                     key={deal.id}
                     className={`mb-0.5 block w-full truncate rounded px-1 text-left text-[10px] ${isOverdue(deal) ? "bg-error/15 text-error" : "bg-primary/10 text-primary"}`}
                     title={deal.brand}
-                    onClick={() => onOpen(deal.id)}
                   >
                     {deal.brand}
-                  </button>
+                  </span>
                 ))}
               {events.length > 3 && (
                 <span className="text-[10px] opacity-60">
                   +{events.length - 3} more
                 </span>
               )}
-            </div>
+            </button>
           );
         })}
       </div>
+      <dialog ref={previewDialog} className="modal" aria-labelledby="calendar-day-title" onClose={() => setPreviewDate(null)}>
+        <div className="modal-box max-w-lg border border-base-300 bg-base-100 p-5">
+          <header className="mb-4 flex items-start justify-between gap-3">
+            <div>
+              <h3 id="calendar-day-title" className="section-title">{previewDate ? dayLabel(previewDate) : "Deadlines"}</h3>
+              <p className="mt-1 text-sm text-base-content/65">{previewEvents.length} {previewEvents.length === 1 ? "deadline" : "deadlines"}</p>
+            </div>
+            <form method="dialog">
+              <button type="submit" className="btn btn-ghost btn-square" aria-label="Close deadline preview" autoFocus><X size={18} /></button>
+            </form>
+          </header>
+          {previewEvents.length ? <ul className="space-y-3">
+            {previewEvents.map(deal => <li key={deal.id} className="rounded-xl border border-base-300 bg-base-200/40 p-3 sm:p-4">
+              <div className="flex flex-wrap items-center gap-2">
+                <h4 className="min-w-0 break-words font-semibold">{deal.brand}</h4>
+                <span className={`tone-chip tone-${statusColor(deal.status)}`}>{deal.status || "No status"}</span>
+              </div>
+              {deal.deadlineStart.includes("T") && <p className="mt-1 text-sm text-base-content/75">
+                {formatTime(deal.deadlineStart)}{deal.deadlineEnd && ` – ${formatTime(deal.deadlineEnd)}`} SGT
+              </p>}
+              {deal.platforms.length > 0 && <p className="mt-1 text-xs text-base-content/70">{deal.platforms.join(", ")}</p>}
+              {deal.next && <p className="mt-2 whitespace-pre-wrap break-words text-sm text-base-content/80"><b>Next step:</b> {deal.next}</p>}
+              <div className="mt-2 flex justify-end">
+                <button type="button" className="btn btn-outline btn-sm min-h-11" aria-label={`Edit deal: ${deal.brand}`} onClick={() => {
+                  previewDialog.current?.close();
+                  onOpen(deal.id);
+                }}>Edit deal</button>
+              </div>
+            </li>)}
+          </ul> : <p className="rounded-xl bg-base-200/50 p-4 text-sm text-base-content/75">No deadlines for this day.</p>}
+        </div>
+        <form method="dialog" className="modal-backdrop"><button type="submit" tabIndex={-1}>Close deadline preview</button></form>
+      </dialog>
     </section>
   );
 }
@@ -1833,17 +1893,10 @@ export default function App() {
   const metrics = [
     {
       key: "new",
-      label: "Need a first reply",
+      label: "Need first reply",
       icon: Inbox,
       test: (d) => d.status === "New - not replied",
       tint: "tone-pink",
-    },
-    {
-      key: "action",
-      label: "Action needed",
-      icon: CircleAlert,
-      test: (d) => d.status === "Action needed",
-      tint: "tone-brown",
     },
     {
       key: "overdue",
@@ -1865,13 +1918,6 @@ export default function App() {
       icon: Send,
       test: isStale,
       tint: "tone-gray",
-    },
-    {
-      key: "pay",
-      label: "Payment pending",
-      icon: Wallet,
-      test: (d) => d.status === "Completed - payment pending",
-      tint: "tone-purple",
     },
   ];
   const filterBase = scoped.filter((d) => {
@@ -2187,13 +2233,15 @@ export default function App() {
                   </div>
                 )}
                 <section
-                  className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6"
+                  className="stats grid w-full grid-flow-row grid-cols-2 gap-3 overflow-visible md:grid-cols-4"
                   aria-label="Summary"
                 >
                   {metrics.map((metric) => (
                     <button
                       key={metric.key}
-                      className={`metric ${metric.tint} ${filters.kpi === metric.key ? "ring-2 ring-primary" : ""}`}
+                      type="button"
+                      aria-pressed={filters.kpi === metric.key}
+                      className={`stat min-h-24 min-w-0 rounded-2xl border-none bg-[var(--tone-bg)] px-4 py-3 text-left focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary ${metric.tint} ${filters.kpi === metric.key ? "ring-2 ring-primary" : ""}`}
                       onClick={() => {
                         setFilters((previous) => ({
                           ...previous,
@@ -2202,18 +2250,17 @@ export default function App() {
                         changeView({ stage: "" });
                       }}
                     >
-                      <metric.icon
-                        size={17}
-                        className="absolute right-4 top-4 opacity-45"
-                      />
-                      <span className="text-xs font-medium opacity-65">
+                      <span className="stat-figure self-start text-base-content/65">
+                        <metric.icon size={17} aria-hidden="true" />
+                      </span>
+                      <span className="stat-title whitespace-normal text-xs font-medium text-base-content/75">
                         {metric.label}
                       </span>
-                      <b className="font-display text-3xl">
-                        {load.state === "ready"
+                      <span className="stat-value font-display text-3xl">
+                        {load.at
                           ? scoped.filter(metric.test).length
                           : "–"}
-                      </b>
+                      </span>
                     </button>
                   ))}
                 </section>
@@ -2444,7 +2491,7 @@ export default function App() {
                   month={month}
                   setMonth={setMonth}
                   onOpen={setDrawer}
-                  ready={load.state === "ready"}
+                  ready={Boolean(load.at)}
                 />
               </>
             )}
