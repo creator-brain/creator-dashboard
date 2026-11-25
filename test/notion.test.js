@@ -28,12 +28,13 @@ test('maps Notion properties to a safe deal model', () => {
   assert.equal(deal.gmail, 'https://mail.google.com/thread')
 })
 
-test('builds Notion updates and stamps Last Activity', () => {
-  const result = updateProperties({ prop: 'dl', value: { start: '2026-12-01T10:00:00+08:00', end: '2026-12-01T11:00:00+08:00' } }, '2026-11-24')
+test('builds Notion updates without changing conversation activity for metadata edits', () => {
+  const result = updateProperties({ prop: 'dl', value: { start: '2026-12-01T10:00:00+08:00', end: '2026-12-01T11:00:00+08:00' } })
   assert.deepEqual(result.Deadline.date, { start: '2026-12-01T10:00:00+08:00', end: '2026-12-01T11:00:00+08:00' })
-  assert.equal(result['Last Activity'].date.start, '2026-11-24')
-  assert.deepEqual(updateProperties({ prop: 'type', value: [] }, '2026-11-24')['Deal Type'], { multi_select: [] })
-  assert.deepEqual(updateProperties({ prop: 'gmail', value: 'https://mail.google.com/mail/u/0/#all/18c9b10f0a123456' }, '2026-11-24')['Gmail Thread'], { url: 'https://mail.google.com/mail/u/0/#all/18c9b10f0a123456' })
+  assert.equal(result['Last Activity'], undefined)
+  assert.deepEqual(updateProperties({ prop: 'type', value: [] })['Deal Type'], { multi_select: [] })
+  assert.deepEqual(updateProperties({ prop: 'gmail', value: 'https://mail.google.com/mail/u/0/#all/18c9b10f0a123456' })['Gmail Thread'], { url: 'https://mail.google.com/mail/u/0/#all/18c9b10f0a123456' })
+  assert.deepEqual(updateProperties({ prop: 'activity', value: '2026-11-24' })['Last Activity'], { date: { start: '2026-11-24' } })
 })
 
 test('paginates the configured data source without storing rows', async () => {

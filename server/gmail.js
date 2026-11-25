@@ -141,7 +141,8 @@ export const gmailThreadUrl = id => `https://mail.google.com/mail/u/0/#all/${id}
 const header = (message, name) => message.payload?.headers?.find(item => item.name?.toLowerCase() === name.toLowerCase())?.value || ''
 const decode = value => value ? Buffer.from(value, 'base64url').toString('utf8') : ''
 function htmlText(value) {
-  return value.replace(/<(script|style)\b[^>]*>[\s\S]*?<\/\1\s*>/gi, '')
+  return value.replace(/<div\b[^>]*class=["'][^"']*\bgmail_quote\b[^"']*["'][^>]*>[\s\S]*$/i, '')
+    .replace(/<(script|style)\b[^>]*>[\s\S]*?<\/\1\s*>/gi, '')
     .replace(/<\s*(br|\/p|\/div|\/li|\/tr)\b[^>]*>/gi, '\n')
     .replace(/<[^>]+>/g, '')
     .replace(/&(#x[\da-f]+|#\d+|amp|lt|gt|quot|apos|nbsp);/gi, (_, entity) => {
@@ -151,6 +152,18 @@ function htmlText(value) {
       }
       return { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: ' ' }[entity.toLowerCase()]
     }).replace(/\n{3,}/g, '\n\n').trim()
+}
+export function currentMessageText(value) {
+  const lines = String(value || '').replace(/\r\n?/g, '\n').split('\n')
+  const hasNewText = index => lines.slice(0, index).some(line => line.trim() && !/^>/.test(line.trim()))
+  const oldHeaders = index => /^From:\s+\S/i.test(lines[index] || '') && lines.slice(index + 1, index + 6).some(line => /^(Sent|Date|To|Subject):\s+/i.test(line.trim()))
+  const cut = lines.findIndex((line, index) => index > 0 && hasNewText(index) && (
+    /^On .{8,} wrote:\s*$/i.test(line.trim()) ||
+    /^-{2,}\s*Original Message\s*-{2,}$/i.test(line.trim()) ||
+    (index > 1 && !lines[index - 1].trim() && oldHeaders(index)) ||
+    (/^>/.test(line.trim()) && /^>/.test((lines[index + 1] || '').trim()))
+  ))
+  return (cut < 0 ? lines : lines.slice(0, cut)).join('\n').trim()
 }
 function bodyText(part, mime) {
   if (part.mimeType === mime && part.body?.data) return decode(part.body.data)
@@ -166,7 +179,7 @@ export function summarizeThread(thread) {
     date: Number(message.internalDate) || 0,
     sent: (message.labelIds || []).includes('SENT'),
     draft: (message.labelIds || []).includes('DRAFT'),
-    body: bodyText(message.payload || {}, 'text/plain') || htmlText(bodyText(message.payload || {}, 'text/html')) || message.snippet || '',
+    body: currentMessageText(bodyText(message.payload || {}, 'text/plain') || htmlText(bodyText(message.payload || {}, 'text/html')) || message.snippet || ''),
     messageId: header(message, 'Message-ID'),
     references: header(message, 'References'),
     replyTo: header(message, 'Reply-To'),

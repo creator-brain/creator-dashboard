@@ -1,7 +1,8 @@
+import { InstagramIntegration, InstagramPanel, syncInstagramLinks } from './Instagram.jsx'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
-import { Archive, ArrowDownUp, CalendarDays, ChevronDown, ChevronLeft, ChevronRight, CircleAlert, Clock3, ExternalLink, Inbox, LayoutDashboard, Menu, Paperclip, Pencil, RefreshCw, Search, Send, SlidersHorizontal, Video, Wallet, X } from 'lucide-react'
+import { Archive, ArrowDownUp, CalendarDays, ChevronDown, ChevronLeft, ChevronRight, CircleAlert, Clock3, ExternalLink, Inbox, LayoutDashboard, Mail, Menu, Paperclip, Pencil, Plug2, RefreshCw, Search, Send, SlidersHorizontal, Video, Wallet, X } from 'lucide-react'
 import { api, age, BOARD_GROUPS, CLOSED, datePart, dayDiff, deadlineValue, FOLLOW_UP_STATUS, formatDate, formatTime, inGroup, isLive, isOverdue, isSoon, isStale, LIVE_GROUPS, PLATFORMS, searchDeals, sortDeals, sourceOf, SOURCE_COLORS, SOURCES, STATUSES, toDateInput, toTimeInput, TYPE_COLORS, TYPES, today } from './model.js'
 import { EMAIL_TEMPLATES, hasTemplateFields } from './emailTemplates.js'
 import { getMediaKit, removeMediaKit, saveMediaKit } from './mediaKit.js'
@@ -42,7 +43,7 @@ function DealCard({ deal, onOpen, onDrag }) {
     {deal.deadlineStart && <div className={`mt-2 flex items-center gap-1.5 text-xs font-semibold ${overdue ? 'text-error' : 'text-primary'}`}><CalendarDays size={13} />{deal.live ? `${formatDate(deal.deadlineStart)} · ${formatTime(deal.deadlineStart)}${deal.deadlineEnd ? `–${formatTime(deal.deadlineEnd)}` : ''}` : overdue ? `${-dayDiff(deal.deadlineStart)}d overdue` : `Due ${formatDate(deal.deadlineStart)}`}</div>}
     {(deal.type.length > 0 || deal.platforms.length > 0) && <div className="mt-3 flex flex-wrap gap-1">{deal.type.map(type => <span key={type} className={`tone-chip tone-${TYPE_COLORS[type] || 'gray'}`}>{type}</span>)}{deal.platforms.map(platform => <span key={platform} className="badge badge-outline badge-xs h-auto py-1">{platform}</span>)}</div>}
     <p className={`mt-3 line-clamp-2 text-xs leading-relaxed ${deal.next ? 'text-base-content/75' : 'italic text-base-content/40'}`}>{deal.next || 'Add a next step'}</p>
-    <div className="mt-4 flex items-center justify-between gap-2 border-t border-base-200 pt-3 text-[11px] text-base-content/50"><span className={`tone-chip tone-${SOURCE_COLORS[deal.source] || 'gray'}`}>{deal.source}</span><span className={isStale(deal) ? 'font-semibold text-warning' : ''}>{deal.status === FOLLOW_UP_STATUS ? 'Follow-up needed' : <>{isStale(deal) ? 'Gone quiet · ' : ''}{age(deal.edited)}</>}</span></div>
+    <div className="mt-4 flex items-center justify-between gap-2 border-t border-base-200 pt-3 text-[11px] text-base-content/50"><span className={`tone-chip tone-${SOURCE_COLORS[deal.source] || 'gray'}`}>{deal.source}</span><span className={isStale(deal) ? 'font-semibold text-warning' : ''}>{deal.status === FOLLOW_UP_STATUS ? 'Follow-up needed' : <>{isStale(deal) ? 'Gone quiet · ' : ''}{age(deal.last || deal.edited)}</>}</span></div>
   </div>
 }
 
@@ -131,7 +132,7 @@ function GmailPanel({ deal, onLinked }) {
     try {
       const files = await Promise.all(attachments.map(encodeAttachment))
       const result = await api(`${apiPath(deal.id)}/gmail/${action}`, { method: 'POST', body: JSON.stringify({ ...form, draftId, attachments: files }) })
-      setMessage(action === 'draft' ? 'Draft saved in Gmail.' : 'Email sent through Gmail.')
+      setMessage(result.warning || (action === 'draft' ? 'Draft saved in Gmail.' : 'Email sent through Gmail.'))
       if (action === 'draft') setDraftId(result.id)
       if (action === 'send') {
         setDraftId(null)
@@ -188,6 +189,33 @@ function GmailPanel({ deal, onLinked }) {
   </section>
 }
 
+function IntegrationsDrawer({ onClose, instagramResult }) {
+  const [gmail, setGmail] = useState(null)
+  const [error, setError] = useState('')
+  const [busy, setBusy] = useState(false)
+  useEffect(() => {
+    let active = true
+    api('/gmail/status').then(status => { if (active) setGmail(status) }).catch(reason => { if (active) { setGmail({ configured: false, connected: false, unavailable: true }); setError(reason.message) } })
+    return () => { active = false }
+  }, [])
+  const disconnectGmail = async () => {
+    setBusy(true); setError('')
+    try {
+      await api('/gmail/disconnect', { method: 'POST' })
+      setGmail(previous => ({ ...previous, connected: false, email: '' }))
+    } catch (reason) { setError(reason.message) }
+    finally { setBusy(false) }
+  }
+  return <><div className="fixed inset-0 z-40 bg-black/35" onClick={onClose} /><aside className="fixed inset-y-0 right-0 z-50 flex w-full max-w-md flex-col bg-base-100 shadow-2xl" role="dialog" aria-modal="true" aria-label="Integrations">
+    <div className="flex items-start justify-between border-b border-base-300 p-5"><div><p className="eyebrow">Workspace</p><h2 className="section-title mt-1">Integrations</h2><p className="mt-1 text-sm text-base-content/55">Connect the places where brand conversations happen.</p></div><button className="btn btn-ghost btn-square btn-sm" aria-label="Close integrations" onClick={onClose}><X size={18} /></button></div>
+    <div className="space-y-3 overflow-y-auto p-5">
+      <section className="rounded-2xl border border-base-300 p-4"><div className="flex items-start gap-3"><span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-rose-100 text-rose-700"><Mail size={20} /></span><div className="min-w-0 flex-1"><div className="flex flex-wrap items-center justify-between gap-2"><h3 className="font-semibold">Gmail</h3><span className={`badge badge-sm ${gmail?.connected ? 'badge-success' : 'badge-ghost'}`}>{gmail?.connected ? 'Connected' : gmail?.unavailable ? 'Unavailable' : gmail ? 'Not connected' : 'Checking'}</span></div><p className="mt-1 text-xs leading-relaxed text-base-content/60">Read linked threads, save drafts and send replies from your deals.</p>{gmail?.connected && <p className="mt-2 truncate text-xs font-medium" title={gmail.email}>{gmail.email}</p>}</div></div><div className="mt-4 flex justify-end">{gmail?.connected ? <button className="btn btn-outline btn-sm" disabled={busy} onClick={disconnectGmail}>{busy ? 'Disconnecting…' : 'Disconnect Gmail'}</button> : gmail?.configured ? <a className="btn btn-primary btn-sm" href="/api/gmail/auth/start">Connect Gmail</a> : gmail && !gmail.unavailable && <span className="text-xs text-base-content/55">Gmail server setup is needed.</span>}</div></section>
+      <InstagramIntegration loginResult={instagramResult} />
+      {error && <p className="text-sm text-error" role="alert">{error}</p>}
+    </div>
+  </aside></>
+}
+
 function DealDrawer({ deal, body, bodyError, onClose, onSave, onLinked }) {
   const [draft, setDraft] = useState(null)
   useEffect(() => setDraft(deal ? { status: deal.status, type: deal.type, fee: deal.fee, next: deal.next, date: toDateInput(deal.deadlineStart), start: toTimeInput(deal.deadlineStart), end: toTimeInput(deal.deadlineEnd) } : null), [deal?.id])
@@ -202,11 +230,12 @@ function DealDrawer({ deal, body, bodyError, onClose, onSave, onLinked }) {
     <div className="grid grid-cols-2 gap-3"><label><span className="mb-1 block text-xs font-semibold">{deal.live ? 'Stream date' : 'Deadline'}</span><input type="date" className="input input-bordered w-full" value={draft.date} onChange={event => saveDeadline({ date: event.target.value })} /></label><label><span className="mb-1 block text-xs font-semibold">Fee</span><input className="input input-bordered w-full" value={draft.fee} onChange={event => setDraft({ ...draft, fee: event.target.value })} onBlur={() => save('fee', draft.fee)} /></label></div>
     {deal.live && <div className="grid grid-cols-2 gap-3"><label><span className="mb-1 block text-xs font-semibold">Starts</span><input type="time" className="input input-bordered w-full" value={draft.start} onChange={event => saveDeadline({ start: event.target.value })} /></label><label><span className="mb-1 block text-xs font-semibold">Ends</span><input type="time" className="input input-bordered w-full" value={draft.end} onChange={event => saveDeadline({ end: event.target.value })} /></label></div>}
     <label className="block"><span className="mb-1 block text-xs font-semibold">Next step</span><textarea className="textarea textarea-bordered min-h-24 w-full" value={draft.next} onChange={event => setDraft({ ...draft, next: event.target.value })} onBlur={() => save('next', draft.next)} /></label>
-    {deal.status === FOLLOW_UP_STATUS && <div className="alert alert-warning text-sm"><Clock3 size={17} /><span>This deal moved here after at least 14 days without a Notion edit. Its Notion status is now Follow up - 14+ days.</span></div>}
+    {deal.status === FOLLOW_UP_STATUS && <div className="alert alert-warning text-sm"><Clock3 size={17} /><span>This deal moved here after at least 14 days since its last recorded activity. Its status was saved to Notion.</span></div>}
     <div className="grid grid-cols-2 gap-3 rounded-xl bg-base-200 p-4 text-xs"><div><b>Agency / platform</b><p className="mt-1 opacity-65">{deal.agency || '—'}</p></div><div><b>Platforms</b><p className="mt-1 opacity-65">{deal.platforms.join(', ') || '—'}</p></div><div><b>Last activity</b><p className="mt-1 opacity-65">{formatDate(deal.last) || '—'}</p></div><div><b>Last edited</b><p className="mt-1 opacity-65">{deal.edited ? new Date(deal.edited).toLocaleString('en-SG', { timeZone: 'Asia/Singapore', day: 'numeric', month: 'short', year: 'numeric' }) : '—'}</p></div><div><b>Source</b><p className="mt-1 opacity-65">{deal.source}</p></div></div>
     <a className="link link-primary inline-flex items-center gap-1 text-sm" href={deal.url} target="_blank" rel="noopener noreferrer">Open in Notion <ExternalLink size={13} /></a>
     <section><h3 className="section-title mb-2">From the Notion page</h3>{bodyError ? <p className="text-sm text-error">{bodyError}</p> : body == null ? <span className="loading loading-spinner loading-sm" /> : <div className="prose prose-sm max-w-none"><ReactMarkdown remarkPlugins={[remarkGfm]}>{notes?.trim() || 'No notes yet.'}</ReactMarkdown></div>}</section>
     {deal.source === 'Email' && <GmailPanel deal={deal} onLinked={onLinked} />}
+    {deal.source === 'Instagram' && <InstagramPanel key={deal.id} deal={deal} onLinked={onLinked} />}
     </div></aside></>
 }
 
@@ -216,7 +245,17 @@ export default function App() {
   const [view, setView] = useState(initialView)
   const [query, setQuery] = useState('')
   const [filters, setFilters] = useState({ type: [], platform: [], source: [], kpi: '' })
-  const [drawer, setDrawer] = useState(null)
+  const [instagramResult, setInstagramResult] = useState(() => {
+    const result = new URLSearchParams(window.location.search).get('instagram')
+    return ['connected', 'cancelled', 'account', 'storage', 'failed'].includes(result) ? result : null
+  })
+  const [drawer, setDrawer] = useState(instagramResult ? 'integrations' : null)
+  useEffect(() => {
+    if (!instagramResult) return
+    const url = new URL(window.location.href)
+    url.searchParams.delete('instagram')
+    window.history.replaceState(window.history.state, '', url)
+  }, [instagramResult])
   const [body, setBody] = useState(null)
   const [bodyError, setBodyError] = useState('')
   const [log, setLog] = useState([])
@@ -225,11 +264,32 @@ export default function App() {
   const [dragId, setDragId] = useState(null)
   const [, setClockTick] = useState(0)
   const queue = useRef(Promise.resolve())
+  const refreshing = useRef(null)
+  const instagramSync = useRef(null)
 
   useEffect(() => { try { localStorage.setItem('cp-view', JSON.stringify({ board: view.board, sort: view.sort, hideEmpty: view.hideEmpty, collapsed: view.collapsed, sidebar: view.sidebar })) } catch { /* Preferences are optional. */ } }, [view])
-  const refresh = async () => { setLoad(previous => ({ ...previous, state: previous.at ? 'refreshing' : 'loading' })); try { const result = await api('/deals'); setDeals(result.deals.map(d => ({ ...d, live: isLive(d), source: sourceOf(d) }))); setLoad({ state: 'ready', message: '', warnings: result.warnings || [], at: new Date() }) } catch (error) { setLoad(previous => ({ ...previous, state: previous.at ? 'ready' : 'error', message: error.message, warnings: [] })); setNotice(`Refresh failed: ${error.message}`) } }
+  function refresh() {
+    if (refreshing.current) return refreshing.current
+    setLoad(previous => ({ ...previous, state: previous.at ? 'refreshing' : 'loading' }))
+    refreshing.current = api('/deals').then(result => {
+      const rows = result.deals.map(deal => ({ ...deal, live: isLive(deal), source: sourceOf(deal) }))
+      setDeals(rows)
+      setLoad({ state: 'ready', message: '', warnings: result.warnings || [], at: new Date() })
+      if (!instagramSync.current && rows.some(deal => deal.source === 'Instagram' && !deal.instagramLinked)) {
+        instagramSync.current = syncInstagramLinks(linked => {
+          setDeals(items => items.map(item => item.id === linked.id ? {
+            ...item, instagramLinked: true, last: linked.last > item.last ? linked.last : item.last,
+          } : item))
+        }).catch(error => setNotice(`Instagram sync: ${error.message}`)).finally(() => { instagramSync.current = null })
+      }
+    }).catch(error => {
+      setLoad(previous => ({ ...previous, state: previous.at ? 'ready' : 'error', message: error.message, warnings: [] }))
+      setNotice(`Refresh failed: ${error.message}`)
+    }).finally(() => { refreshing.current = null })
+    return refreshing.current
+  }
   useEffect(() => { refresh() }, [])
-  useEffect(() => { if (!drawer || drawer === 'log') return; let active = true; setBody(null); setBodyError(''); api(`${apiPath(drawer)}/body`).then(data => { if (active) setBody(data.markdown) }).catch(error => { if (active) setBodyError(error.message) }); return () => { active = false } }, [drawer])
+  useEffect(() => { if (!drawer || drawer === 'log' || drawer === 'integrations') return; let active = true; setBody(null); setBodyError(''); api(`${apiPath(drawer)}/body`).then(data => { if (active) setBody(data.markdown) }).catch(error => { if (active) setBodyError(error.message) }); return () => { active = false } }, [drawer])
   useEffect(() => { const handler = event => { if (event.key === 'Escape') setDrawer(null) }; document.addEventListener('keydown', handler); return () => document.removeEventListener('keydown', handler) }, [])
   useEffect(() => { const timer = setInterval(() => setClockTick(tick => tick + 1), 60_000); return () => clearInterval(timer) }, [])
   useEffect(() => { const timer = setInterval(() => refresh(), 15 * 60_000); return () => clearInterval(timer) }, [])
@@ -240,7 +300,7 @@ export default function App() {
     const patch = prop === 'dl' ? { deadlineStart: value?.start || '', deadlineEnd: value?.end || '' } : { [prop]: value }
     setDeals(items => items.map(item => {
       if (item.id !== deal.id) return item
-      const next = { ...item, ...patch, last: today(), edited: new Date().toISOString() }
+      const next = { ...item, ...patch, edited: new Date().toISOString() }
       return { ...next, live: isLive(next) }
     }))
     const entry = { id: crypto.randomUUID(), brand: deal.brand, prop, value, at: new Date(), status: 'Waiting' }
@@ -298,7 +358,8 @@ export default function App() {
 
   return <div className="min-h-screen bg-base-200 text-base-content"><div className="flex min-h-screen">
     {view.sidebar && <aside className="sidebar hidden w-64 shrink-0 flex-col overflow-y-auto px-4 py-6 lg:flex">
-      <div className="mb-10 flex items-center gap-3 px-2"><span className="flex h-10 w-10 items-center justify-center rounded-full bg-rose-200 font-display text-lg font-bold text-primary">CP</span><div><b className="font-display text-lg">Collab Pipeline</b><p className="text-xs text-white/55">💌 Collab Tracker</p></div></div>
+      <div className="mb-3 flex items-center gap-3 px-2"><span className="flex h-10 w-10 items-center justify-center rounded-full bg-rose-200 font-display text-lg font-bold text-primary">CP</span><div><b className="font-display text-lg">Collab Pipeline</b><p className="text-xs text-white/55">💌 Collab Tracker</p></div></div>
+      <button className="sidebar-link mb-8 border border-white/15 bg-white/5" onClick={() => setDrawer('integrations')}><Plug2 size={16} /> Integrations <ChevronRight size={15} className="ml-auto opacity-60" /></button>
       <p className="mb-3 px-3 text-[10px] font-bold uppercase tracking-[.2em] text-white/40">Pipeline</p>
       <button className="sidebar-link" onClick={() => chooseStage('')}><LayoutDashboard size={16} /> Deal board</button>
       <div className="ml-3 border-l border-white/15 pl-3">
@@ -312,7 +373,7 @@ export default function App() {
       <button className="sidebar-link" onClick={() => setDrawer('log')}><ArrowDownUp size={16} /> Notion writes <span className="ml-auto text-xs text-white/55">{log.filter(e => e.status !== 'Saved').length}</span></button>
       <div className="mt-auto rounded-xl border border-white/15 bg-white/5 p-3 text-xs leading-relaxed text-white/55">Changes save to Notion. Your view preferences stay on this device.</div>
     </aside>}
-    <div className="min-w-0 flex-1"><header className="sticky top-0 z-30 flex min-h-17 items-center gap-3 border-b border-base-300 bg-base-200/95 px-4 backdrop-blur md:px-7"><button className="btn btn-ghost btn-square btn-sm hidden lg:inline-flex" aria-label="Toggle sidebar" onClick={() => changeView({ sidebar: !view.sidebar })}><Menu size={18} /></button><SearchBox query={query} setQuery={setQuery} results={searchResults} onOpen={setDrawer} ready={Boolean(load.at)} /><button className="btn btn-ghost btn-sm ml-auto gap-2 text-xs" disabled={load.state === 'loading' || load.state === 'refreshing'} onClick={refresh}><RefreshCw size={14} className={load.state === 'refreshing' ? 'animate-spin' : ''} /><span className="hidden sm:inline">{load.state === 'ready' ? `Live from Notion · ${load.at?.toLocaleTimeString('en-SG', { hour: '2-digit', minute: '2-digit' })}` : 'Refresh'}</span></button></header>
+    <div className="min-w-0 flex-1"><header className="sticky top-0 z-30 flex min-h-17 items-center gap-3 border-b border-base-300 bg-base-200/95 px-4 backdrop-blur md:px-7"><button className="btn btn-ghost btn-square btn-sm hidden lg:inline-flex" aria-label="Toggle sidebar" onClick={() => changeView({ sidebar: !view.sidebar })}><Menu size={18} /></button><SearchBox query={query} setQuery={setQuery} results={searchResults} onOpen={setDrawer} ready={Boolean(load.at)} /><button className="btn btn-ghost btn-sm ml-auto gap-2 text-xs" disabled={load.state === 'loading' || load.state === 'refreshing'} onClick={refresh}><RefreshCw size={14} className={load.state === 'refreshing' ? 'animate-spin' : ''} /><span className="hidden sm:inline">{load.state === 'ready' ? `Live from Notion · ${load.at?.toLocaleTimeString('en-SG', { hour: '2-digit', minute: '2-digit' })}` : 'Refresh'}</span></button><button className="btn btn-ghost btn-sm gap-2 text-xs" aria-label="Integrations" onClick={() => setDrawer('integrations')}><Plug2 size={16} /><span className="hidden md:inline">Integrations</span></button></header>
     <main className="mx-auto max-w-[1800px] space-y-7 px-4 py-7 md:px-7"><div><p className="eyebrow">Your workspace</p><h1 className="font-display text-3xl font-semibold tracking-tight md:text-4xl">Good {new Date().getHours() < 12 ? 'morning' : new Date().getHours() < 18 ? 'afternoon' : 'evening'}.</h1><p className="mt-1 text-sm text-base-content/55">Your collaborations, live from Notion.</p></div>
     {load.state === 'error' && <div className="alert alert-warning items-start"><CircleAlert size={20} /><div><b>Couldn’t load the tracker</b><p className="text-sm">{load.message}</p></div><button className="btn btn-sm" onClick={refresh}>Try again</button></div>}{load.warnings?.length > 0 && <div className="alert alert-warning items-start"><CircleAlert size={20} /><div><b>{load.warnings.length} follow-up update{load.warnings.length === 1 ? '' : 's'} failed in Notion</b><p className="text-sm">{load.warnings[0]}{load.warnings.length > 1 ? ` (+${load.warnings.length - 1} more)` : ''}</p></div><button className="btn btn-sm" onClick={refresh}>Retry</button></div>}{load.state === 'loading' && <div className="alert bg-base-100"><span className="loading loading-spinner loading-sm" /> Loading your collaborations from Notion…</div>}
     {searchActive ? <SearchResults query={query} results={searchResults} onOpen={setDrawer} ready={Boolean(load.at)} /> : <>
@@ -320,11 +381,12 @@ export default function App() {
     <section className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6" aria-label="Summary">{metrics.map(metric => <button key={metric.key} className={`metric ${metric.tint} ${filters.kpi === metric.key ? 'ring-2 ring-primary' : ''}`} onClick={() => { setFilters(previous => ({ ...previous, kpi: previous.kpi === metric.key ? '' : metric.key })); changeView({ stage: '', collapsed: [] }) }}><metric.icon size={17} className="absolute right-4 top-4 opacity-45" /><span className="text-xs font-medium opacity-65">{metric.label}</span><b className="font-display text-3xl">{load.state === 'ready' ? scoped.filter(metric.test).length : '–'}</b></button>)}</section>
     <div className="flex flex-wrap items-end justify-between gap-4"><div><div className="tabs tabs-box w-fit bg-base-100"><button className={`tab gap-2 ${view.board === 'live' ? 'tab-active' : ''}`} onClick={() => { changeView({ board: 'live', stage: '' }); setFilters(previous => ({ ...previous, kpi: '' })) }}><Video size={15} /> Livestreams <span className="badge badge-xs">{deals.filter(d => d.live && !CLOSED.has(d.status)).length}</span></button><button className={`tab gap-2 ${view.board === 'ugc' ? 'tab-active' : ''}`} onClick={() => { changeView({ board: 'ugc', stage: '' }); setFilters(previous => ({ ...previous, kpi: '' })) }}><Send size={15} /> UGC Videos <span className="badge badge-xs">{deals.filter(d => !d.live && !CLOSED.has(d.status)).length}</span></button></div><h2 className="section-title mt-4">{view.stage === '@archive' ? 'Archive' : selectedGroup?.label || selectedGroup?.key || 'Deal board'}</h2></div><div className="flex flex-wrap items-center gap-2"><Filter label="Deal type" values={TYPES} selected={filters.type} onChange={value => setFilters({ ...filters, type: value })} /><Filter label="Platform" values={PLATFORMS} selected={filters.platform} onChange={value => setFilters({ ...filters, platform: value })} /><Filter label="Source" values={SOURCES} selected={filters.source} onChange={value => setFilters({ ...filters, source: value })} /><select className="select select-bordered select-sm w-auto rounded-full" aria-label="Sort cards" value={view.sort} onChange={e => changeView({ sort: e.target.value })}><option value="last">Last activity</option><option value="deadline">Deadline</option><option value="edited">Last edited</option><option value="brand">Brand A–Z</option></select><label className="flex items-center gap-2 text-xs"><input type="checkbox" className="checkbox checkbox-xs" checked={view.hideEmpty} onChange={e => changeView({ hideEmpty: e.target.checked })} /> Hide empty</label></div></div>
     <div className="flex gap-2 overflow-x-auto pb-2 lg:hidden"><button className="btn btn-sm" onClick={() => chooseStage('')}>All</button>{groups.map(group => <button key={group.key} className={`tone-chip tone-${group.color} shrink-0 ${view.stage === group.key ? 'ring-2 ring-primary' : ''}`} onClick={() => chooseStage(group.key)}>{group.label || group.key}</button>)}<button className="btn btn-sm" onClick={() => chooseStage('@archive')}>Archive</button><button className="btn btn-sm" onClick={() => setDrawer('log')}>Writes</button></div>
-    <div className={`board-phases ${selectedGroup ? 'solo' : ''}`}>{phases.map(phase => { const phaseGroups = selectedGroup ? [selectedGroup] : groups.filter(g => g.phase === phase); return <section key={phase} className="board-phase"><div className="mb-3 flex items-center gap-2"><span className="eyebrow">{phase}</span><span className="text-xs text-base-content/40">{visible.filter(d => phaseGroups.some(g => inGroup(g, d))).length} deals</span></div><div className="board-phase-columns flex gap-3 pb-3">{phaseGroups.map(group => { const items = sortDeals(visible.filter(d => inGroup(group, d)), view.sort); const collapsed = view.collapsed.includes(group.key) && !selectedGroup; return <div key={group.key} className={`board-column ${selectedGroup ? 'solo' : ''} ${collapsed ? 'w-14 min-w-14' : selectedGroup ? 'min-w-70 max-w-2xl flex-1' : 'w-68 min-w-68'}`} onDragOver={event => event.preventDefault()} onDrop={event => drop(event, group)}><div className="flex items-center justify-between gap-2 border-b border-base-300 px-3 py-3"><span className={`tone-chip tone-${group.color}`}>{collapsed ? '·' : group.label || group.key}</span>{!collapsed && <span className="text-xs opacity-45">{items.length}</span>}<button className="btn btn-ghost btn-square btn-xs" aria-label={collapsed ? 'Expand column' : 'Collapse column'} onClick={() => changeView({ collapsed: collapsed ? view.collapsed.filter(k => k !== group.key) : [...view.collapsed, group.key] })}><ChevronLeft size={14} className={collapsed ? 'rotate-180' : ''} /></button></div>{!collapsed && <div className={`board-column-body min-h-24 space-y-2 p-2 ${dragId ? 'bg-primary/5' : ''}`}>{group.key === FOLLOW_UP_STATUS && <p className="px-2 pt-1 text-[11px] leading-snug text-base-content/45">Automatically moved here after 14 days without a Notion edit. Status saved to Notion.</p>}{items.length ? items.map(deal => <DealCard key={deal.id} deal={deal} onOpen={setDrawer} onDrag={setDragId} />) : <div className="p-5 text-center text-xs text-base-content/35">Drop a card here</div>}</div>}</div> })}</div></section> })}</div>
+    <div className={`board-phases ${selectedGroup ? 'solo' : ''}`}>{phases.map(phase => { const phaseGroups = selectedGroup ? [selectedGroup] : groups.filter(g => g.phase === phase); return <section key={phase} className="board-phase"><div className="mb-3 flex items-center gap-2"><span className="eyebrow">{phase}</span><span className="text-xs text-base-content/40">{visible.filter(d => phaseGroups.some(g => inGroup(g, d))).length} deals</span></div><div className="board-phase-columns flex gap-3 pb-3">{phaseGroups.map(group => { const items = sortDeals(visible.filter(d => inGroup(group, d)), view.sort); const collapsed = view.collapsed.includes(group.key) && !selectedGroup; return <div key={group.key} className={`board-column ${selectedGroup ? 'solo' : ''} ${collapsed ? 'w-14 min-w-14' : selectedGroup ? 'min-w-70 max-w-2xl flex-1' : 'w-68 min-w-68'}`} onDragOver={event => event.preventDefault()} onDrop={event => drop(event, group)}><div className="flex items-center justify-between gap-2 border-b border-base-300 px-3 py-3"><span className={`tone-chip tone-${group.color}`}>{collapsed ? '·' : group.label || group.key}</span>{!collapsed && <span className="text-xs opacity-45">{items.length}</span>}<button className="btn btn-ghost btn-square btn-xs" aria-label={collapsed ? 'Expand column' : 'Collapse column'} onClick={() => changeView({ collapsed: collapsed ? view.collapsed.filter(k => k !== group.key) : [...view.collapsed, group.key] })}><ChevronLeft size={14} className={collapsed ? 'rotate-180' : ''} /></button></div>{!collapsed && <div className={`board-column-body min-h-24 space-y-2 p-2 ${dragId ? 'bg-primary/5' : ''}`}>{group.key === FOLLOW_UP_STATUS && <p className="px-2 pt-1 text-[11px] leading-snug text-base-content/45">Automatically moved here 14 days after the last recorded activity. Status saved to Notion.</p>}{items.length ? items.map(deal => <DealCard key={deal.id} deal={deal} onOpen={setDrawer} onDrag={setDragId} />) : <div className="p-5 text-center text-xs text-base-content/35">Drop a card here</div>}</div>}</div> })}</div></section> })}</div>
     <Calendar deals={calendarDeals} month={month} setMonth={setMonth} onOpen={setDrawer} ready={load.state === 'ready'} />
     </>}
     </main></div></div>
     {activeDeal && <DealDrawer deal={activeDeal} body={body} bodyError={bodyError} onClose={() => setDrawer(null)} onSave={save} onLinked={linked => setDeals(items => items.map(item => item.id === linked.id ? { ...linked, live: isLive(linked), source: sourceOf(linked) } : item))} />}
+    {drawer === 'integrations' && <IntegrationsDrawer instagramResult={instagramResult} onClose={() => { setDrawer(null); setInstagramResult(null) }} />}
     {drawer === 'log' && <><div className="fixed inset-0 z-40 bg-black/35" onClick={() => setDrawer(null)} /><aside className="fixed inset-y-0 right-0 z-50 w-full max-w-md overflow-y-auto bg-base-100 p-5 shadow-2xl" role="dialog" aria-label="Notion writes"><div className="mb-5 flex items-center justify-between"><h2 className="section-title">Notion writes</h2><button className="btn btn-ghost btn-square btn-sm" onClick={() => setDrawer(null)}><X size={18} /></button></div><p className="mb-5 text-xs text-base-content/60">Every edit is sent to the Collab Tracker page in Notion. Failed changes are undone on the board.</p>{log.length ? log.map(entry => <div key={entry.id} className="mb-3 rounded-xl border border-base-300 p-3 text-sm"><div className="flex justify-between"><b>{entry.brand}</b><span className={`badge badge-sm ${entry.status === 'Failed' ? 'badge-error' : entry.status === 'Saved' ? 'badge-success' : 'badge-warning'}`}>{entry.status}</span></div><p className="mt-1 text-xs opacity-60">{entry.prop} · {entry.at.toLocaleTimeString('en-SG')} · {Array.isArray(entry.value) ? entry.value.join(', ') : typeof entry.value === 'object' ? JSON.stringify(entry.value) : entry.value}</p>{entry.error && <p className="mt-1 text-xs text-error">{entry.error}</p>}</div>) : <p className="text-sm opacity-50">No changes yet.</p>}</aside></>}
     {notice && <div className="toast toast-end z-[60]"><div className="alert alert-error max-w-sm text-sm"><span>{notice}</span><button className="btn btn-ghost btn-xs" aria-label="Dismiss" onClick={() => setNotice('')}><X size={14} /></button></div></div>}
   </div>

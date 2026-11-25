@@ -1,4 +1,6 @@
-import { FOLLOW_UP_STATUS, isAwaitingFollowUp } from '../src/model.js'
+import { FOLLOW_UP_STATUS, isAwaitingFollowUp, normalizeInstagramHandle, sourceOf } from '../src/model.js'
+
+export const INSTAGRAM_CONVERSATION = 'Instagram Conversation ID'
 
 const DATA_SOURCE_ID = '8206590b-d48c-825b-ac32-07e2152ec3e1'
 const BASE = 'https://api.notion.com/v1'
@@ -35,6 +37,16 @@ const text = (page, name) => {
 }
 const multi = (page, name) => (property(page, name).multi_select || []).map(item => item.name)
 
+export const instagramConversationId = page => text(page, INSTAGRAM_CONVERSATION)
+export function instagramContactHandle(page) {
+  const contact = property(page, 'Contact')
+  const value = (text(page, 'Contact') || contact.url || contact.email || '').trim()
+  const handle = value.match(/^@?([\w.]{1,30})$/)?.[1]
+    || value.match(/^https:\/\/(?:www\.)?instagram\.com\/([\w.]{1,30})\/?(?:[?#].*)?$/i)?.[1]
+    || text(page, 'Instagram Handle').trim().match(/^@?([\w.]{1,30})$/)?.[1]
+  return handle ? normalizeInstagramHandle(handle) : ''
+}
+
 export function toDeal(page) {
   const date = property(page, 'Deadline').date || {}
   return {
@@ -53,27 +65,46 @@ export function toDeal(page) {
     last: property(page, 'Last Activity').date?.start?.slice(0, 10) || '',
     edited: property(page, 'Last Edited').last_edited_time || page.last_edited_time || '',
     gmail: property(page, 'Gmail Thread').url || '',
+    instagramLinked: Boolean(instagramConversationId(page)),
   }
 }
 
-export async function listDeals() {
-  const deals = []
+async function* trackerPages(filter) {
   let cursor
   do {
     const data = await notion(`/data_sources/${DATA_SOURCE_ID}/query`, {
       method: 'POST',
-      body: JSON.stringify({ page_size: 100, ...(cursor ? { start_cursor: cursor } : {}) }),
+      body: JSON.stringify({ page_size: 100, ...(cursor ? { start_cursor: cursor } : {}), ...(filter ? { filter } : {}) }),
     })
-    deals.push(...data.results.map(toDeal))
+    yield* data.results
     cursor = data.has_more ? data.next_cursor : null
   } while (cursor)
+}
+
+export async function listDeals() {
+  const deals = []
+  for await (const page of trackerPages()) deals.push(toDeal(page))
   return deals
+}
+
+export async function unlinkedInstagramDeals() {
+  const schema = await notion(`/data_sources/${DATA_SOURCE_ID}`)
+  if (schema.properties?.[INSTAGRAM_CONVERSATION]?.type !== 'rich_text') {
+    throw Object.assign(new Error(`Add a Text property called ${INSTAGRAM_CONVERSATION} to the Notion tracker.`), { status: 409 })
+  }
+  const pending = []
+  const filter = { property: INSTAGRAM_CONVERSATION, rich_text: { is_empty: true } }
+  for await (const page of trackerPages(filter)) {
+    if (sourceOf(toDeal(page)) !== 'Instagram' || instagramConversationId(page)) continue
+    const handle = instagramContactHandle(page)
+    if (handle) pending.push({ id: page.id, handle })
+  }
+  return pending
 }
 
 export async function reconcileFollowUps(now = Date.now()) {
   const deals = await listDeals()
   const warnings = []
-  const today = new Date(now).toLocaleDateString('en-CA', { timeZone: 'Asia/Singapore' })
   for (const [index, deal] of deals.entries()) {
     if (!isAwaitingFollowUp(deal, now)) continue
     try {
@@ -89,7 +120,7 @@ export async function reconcileFollowUps(now = Date.now()) {
       }
       const updated = await notion(`/pages/${deal.id}`, {
         method: 'PATCH',
-        body: JSON.stringify({ properties: updateProperties({ prop: 'status', value: FOLLOW_UP_STATUS }, today) }),
+        body: JSON.stringify({ properties: updateProperties({ prop: 'status', value: FOLLOW_UP_STATUS }) }),
       })
       deals[index] = toDeal(updated)
     } catch (error) {
@@ -105,8 +136,8 @@ export async function reconcileFollowUps(now = Date.now()) {
 const rich = value => [{ type: 'text', text: { content: String(value) } }]
 const dateProperty = value => ({ date: value ? { start: value.start, ...(value.end ? { end: value.end } : {}) } : null })
 
-export function updateProperties(change, today) {
-  const properties = { 'Last Activity': dateProperty({ start: today }) }
+export function updateProperties(change) {
+  const properties = {}
   switch (change.prop) {
     case 'status': properties.Status = { select: change.value ? { name: change.value } : null }; break
     case 'type': properties['Deal Type'] = { multi_select: (change.value || []).map(name => ({ name })) }; break
@@ -114,19 +145,30 @@ export function updateProperties(change, today) {
     case 'next': properties['Next Step'] = { rich_text: change.value ? rich(change.value) : [] }; break
     case 'dl': properties.Deadline = dateProperty(change.value); break
     case 'gmail': properties['Gmail Thread'] = { url: change.value }; break
+    case 'instagram': properties[INSTAGRAM_CONVERSATION] = { rich_text: change.value ? rich(change.value) : [] }; break
+    case 'activity': properties['Last Activity'] = dateProperty({ start: change.value }); break
     default: throw Object.assign(new Error('Unsupported property'), { status: 400 })
   }
   return properties
 }
 
-export async function updateDeal(id, change, today) {
+export async function updateDeal(id, change) {
   const page = await notion(`/pages/${id}`)
   if (page.parent?.data_source_id?.replaceAll('-', '') !== DATA_SOURCE_ID.replaceAll('-', '')) {
     throw Object.assign(new Error('This page is outside the Collab Tracker data source.'), { status: 403 })
   }
+  if (change.instagramHandle) {
+    const current = toDeal(page)
+    if (current.instagramLinked || sourceOf(current) !== 'Instagram' || instagramContactHandle(page) !== change.instagramHandle) return current
+  }
+  const properties = updateProperties(change)
+  if (change.activityDate) {
+    const previous = property(page, 'Last Activity').date?.start?.slice(0, 10) || ''
+    if (change.activityDate > previous) properties['Last Activity'] = dateProperty({ start: change.activityDate })
+  }
   return toDeal(await notion(`/pages/${id}`, {
     method: 'PATCH',
-    body: JSON.stringify({ properties: updateProperties(change, today) }),
+    body: JSON.stringify({ properties }),
   }))
 }
 

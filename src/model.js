@@ -29,16 +29,18 @@ export const PLATFORMS = ['TikTok', 'Instagram', 'Live', 'Shopee']
 export const SOURCES = ['Email', 'Instagram', 'WhatsApp', 'Unknown']
 export const SOURCE_COLORS = { Email: 'blue', Instagram: 'pink', WhatsApp: 'green', Unknown: 'gray' }
 export const CLOSED = new Set(['Completed', 'Missed/Not Interested'])
-export const isAwaitingFollowUp = (deal, now = Date.now()) => deal.status === 'Awaiting brand' && Boolean(deal.edited) && now - new Date(deal.edited).getTime() >= FOLLOW_UP_DAYS * 864e5
+export const activityTime = deal => deal.last ? new Date(`${datePart(deal.last)}T00:00:00+08:00`).getTime() : deal.edited ? new Date(deal.edited).getTime() : NaN
+export const isAwaitingFollowUp = (deal, now = Date.now()) => deal.status === 'Awaiting brand' && Number.isFinite(activityTime(deal)) && now - activityTime(deal) >= FOLLOW_UP_DAYS * 864e5
 export const inGroup = (group, deal) => (group.statuses || [group.key]).includes(deal.status)
 export const isLive = deal => deal.type.includes('Livestream') || deal.platforms.includes('Live') || /\blive\b|livestream|\bstreams?\b/i.test(`${deal.brand} ${deal.agency}`)
 export const sourceOf = deal => deal.gmail ? 'Email' : /whatsapp/i.test(deal.agency) ? 'WhatsApp' : /instagram/i.test(deal.agency) ? 'Instagram' : 'Unknown'
+export const normalizeInstagramHandle = value => value.trim().replace(/^@/, '').toLowerCase()
 export const datePart = value => value?.slice(0, 10) || ''
 export const today = () => new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Singapore' })
 export const dayDiff = value => Math.round((new Date(`${datePart(value)}T00:00:00+08:00`) - new Date(`${today()}T00:00:00+08:00`)) / 864e5)
 export const isOverdue = deal => deal.deadlineStart && dayDiff(deal.deadlineStart) < 0 && !CLOSED.has(deal.status)
 export const isSoon = deal => deal.deadlineStart && dayDiff(deal.deadlineStart) >= 0 && dayDiff(deal.deadlineStart) <= 7 && !CLOSED.has(deal.status)
-export const isStale = deal => deal.status === FOLLOW_UP_STATUS || deal.edited && !CLOSED.has(deal.status) && deal.status !== 'Completed - payment pending' && Date.now() - new Date(deal.edited).getTime() >= FOLLOW_UP_DAYS * 864e5
+export const isStale = deal => deal.status === FOLLOW_UP_STATUS || !CLOSED.has(deal.status) && deal.status !== 'Completed - payment pending' && Number.isFinite(activityTime(deal)) && Date.now() - activityTime(deal) >= FOLLOW_UP_DAYS * 864e5
 export const formatDate = value => value ? new Date(`${datePart(value)}T00:00:00+08:00`).toLocaleDateString('en-SG', { day: 'numeric', month: 'short', timeZone: 'Asia/Singapore' }) : ''
 export const formatTime = value => value && value.includes('T') ? new Date(value).toLocaleTimeString('en-SG', { hour: 'numeric', minute: '2-digit', timeZone: 'Asia/Singapore' }) : ''
 export const age = value => {

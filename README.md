@@ -26,7 +26,9 @@ The Vercel project is `maguireongs-projects/collab-pipeline`. Its production URL
 
 ## Connect Gmail
 
-The Gmail conversation section appears only for deals with an **Email** source pill. The pill comes from that deal's Notion `Gmail Thread` property. Add a Gmail URL there to link a deal that does not yet have an Email pill; linked deals can change their conversation link in the drawer. The server checks that the connected Gmail account can read a newly linked conversation before saving it. Existing `thread-f:` Gmail links are supported. Opening the deal retrieves the full conversation with the newest non-draft message open, fills the reply recipient and subject, and sends or saves drafts in the same thread. Email text is displayed as plain text. Gmail account access uses OAuth; the server never puts Google tokens in the frontend bundle or stores them in Notion. A refresh token is kept in an encrypted, HTTP-only browser cookie. Disconnecting removes that cookie.
+Open **Integrations** below the Collab Pipeline name in the sidebar, or from the top bar on smaller screens, to connect or disconnect Gmail. The same panel connects or disconnects Instagram after the server is configured.
+
+The Gmail conversation section appears only for deals with an **Email** source pill. The pill comes from that deal's Notion `Gmail Thread` property. Add a Gmail URL there to link a deal that does not yet have an Email pill; linked deals can change their conversation link in the drawer. The server checks that the connected Gmail account can read a newly linked conversation before saving it. Existing `thread-f:` Gmail links are supported. Opening the deal retrieves the full conversation with the newest non-draft message open, fills the reply recipient and subject, and sends or saves drafts in the same thread. Each message shows its newly written text without the quoted chain from earlier replies. Email text is displayed as plain text. Gmail account access uses OAuth; the server never puts Google tokens in the frontend bundle or stores them in Notion. A refresh token is kept in an encrypted, HTTP-only browser cookie. Disconnecting removes that cookie.
 
 The reply editor includes starting templates for requesting details, sharing a rate, following up, submitting a draft, checking payment, and declining. Selecting a template fills only the local editor. Review bracketed details and the recipient before choosing **Save draft** to store it in Gmail.
 
@@ -42,14 +44,13 @@ The **Saved media kit** control stores one reusable file in this browser's Index
 
 For local testing, put the same client ID, secret and cookie key in `.env`, with the local redirect URI and `GMAIL_APP_ORIGIN` from `.env.example`. Do not commit these values.
 
-## Data and security
+## Instagram setup
 
-Notion remains the only deal store. Browser `localStorage` keeps only display preferences, while IndexedDB holds the optional reusable media kit. The token never enters the frontend bundle. The server limits reads and writes to the configured data source and validates property updates. It stamps `Last Activity` on every edit. Deal page content is rendered as escaped Markdown; HTML from Notion is not executed.
+1. In the Collab Tracker data source, add a **Text** property named **Instagram Conversation ID**. The dashboard puts only the linked conversation ID in this property.
+2. In Meta's **API setup with Unified login**, select a configuration with `instagram_basic` and `instagram_manage_messages`. Register the exact OAuth redirect URL used by the app: `http://127.0.0.1:5173/api/meta/auth/callback` for local testing if accepted by Meta, or `https://collab-pipeline.vercel.app/api/meta/auth/callback` for production.
+3. Set `META_CLIENT_ID` (Meta App ID), `META_CLIENT_SECRET`, `META_CONFIG_ID`, `META_IG_ACCOUNT_ID` (your Instagram professional account ID), and `META_REDIRECT_URI`. Open the app at the same host as the redirect URI so the browser can return the login state cookie. During development, open Vite at `http://127.0.0.1:5173`.
+4. On Vercel, set `META_SESSION_REDIS_URL` and `META_SESSION_REDIS_TOKEN` to a dedicated Upstash Redis instance's HTTPS REST URL and token. Meta credentials stay in server-side sessions for up to seven days. Local sessions are cleared when the API server restarts if Redis isn't configured.
+5. For Instagram deals, the Notion automation puts the Instagram handle in **Contact**. The dashboard accepts the handle with or without an `@` prefix, or as an Instagram profile URL. The deal needs the **Instagram** source pill, which comes from **Agency / Platform** when there is no Gmail thread.
+6. In **Integrations → Connect Instagram**, authorize the configured professional account. On dashboard load or refresh, the app checks the connected inbox for Instagram deals with a handle and no saved conversation ID. It saves only unique exact matches. Open the deal to fetch recent DMs, or use **Refresh messages** for the latest. The conversation picker is available if the app can't match a deal automatically.
 
-The old `collab-pipeline.html` is retained as the previously published Claude Artifact. The React app starts from `index.html` and does not need the Artifact runtime.
-
-Typing in search shows matching suggestions and replaces the board with a single vertical results list. It searches both deal tabs and the archive, and shows an explicit zero-match state. Clearing the field returns to the board.
-
-### Follow up column
-
-On both tabs, an **Awaiting brand** deal moves to **Follow up · 14+ days** when its Notion **Last Edited** time is at least 14 days old. The server rechecks each candidate page, then writes the real Notion `Status` option **Follow up - 14+ days** and stamps `Last Activity`. A failed write leaves the deal in Awaiting brand and appears as a warning in the app. The server checks every 15 minutes while running; opening or refreshing the board also checks. The first successful move adds the select option to the Notion data source if the integration has permission to update it.
+**Webhook verification** uses a separate URL, `https://collab-pipeline.vercel.app/api/meta/webhook`, with the exact `META_WEBHOOK_VERIFY_TOKEN` value configured on the server. Reading linked conversations uses the Graph API on demand. Keep the messages webhook subscription off for now because background event processing has not been implemented.

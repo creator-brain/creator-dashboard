@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { gmailThreadUrl, makeMessage, replyDetails, summarizeThread, threadIdFromUrl } from '../server/gmail.js'
+import { currentMessageText, gmailThreadUrl, makeMessage, replyDetails, summarizeThread, threadIdFromUrl } from '../server/gmail.js'
 
 test('accepts only Gmail thread links', () => {
   assert.equal(threadIdFromUrl('https://mail.google.com/mail/u/0/#all/18c9b10f0a123456'), '18c9b10f0a123456')
@@ -60,6 +60,21 @@ test('keeps the full body of an HTML-only email as safe text', () => {
   const body = Buffer.from('<p>Hi &amp; welcome</p><p>Brief attached.</p><script>ignore()</script>').toString('base64url')
   const thread = summarizeThread({ id: 'thread1', messages: [{ id: 'm1', payload: { mimeType: 'text/html', body: { data: body } } }] })
   assert.equal(thread.messages[0].body, 'Hi & welcome\nBrief attached.')
+})
+
+test('shows only the newly written part of a reply', () => {
+  const body = 'Hi, the revised brief is attached.\nPlease confirm the posting date.\n\nOn Mon, 23 Nov 2026 at 10:00, Brand <brand@example.com> wrote:\n> Earlier email\n> Older details'
+  assert.equal(currentMessageText(body), 'Hi, the revised brief is attached.\nPlease confirm the posting date.')
+  const thread = summarizeThread({ id: 'thread1', messages: [{ id: 'm1', payload: { mimeType: 'text/plain', body: { data: Buffer.from(body).toString('base64url') } } }] })
+  assert.equal(thread.messages[0].body, 'Hi, the revised brief is attached.\nPlease confirm the posting date.')
+})
+
+test('removes Outlook and Gmail HTML quoted history without trimming a standalone email', () => {
+  assert.equal(currentMessageText('Current update\n\nFrom: Brand <brand@example.com>\nSent: Monday\nSubject: Old\nOld body'), 'Current update')
+  const html = '<div>Current update and the new deliverables.</div><div class="gmail_quote"><div>Old reply</div></div>'
+  const thread = summarizeThread({ id: 'thread1', messages: [{ id: 'm1', payload: { mimeType: 'text/html', body: { data: Buffer.from(html).toString('base64url') } } }] })
+  assert.equal(thread.messages[0].body, 'Current update and the new deliverables.')
+  assert.equal(currentMessageText('Current update\n> One quoted line used as an example'), 'Current update\n> One quoted line used as an example')
 })
 
 test('fills a reply from the latest conversation and external participant', () => {

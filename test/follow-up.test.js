@@ -13,6 +13,11 @@ test('marks an Awaiting brand deal eligible at exactly 14 days', () => {
   assert.equal(isAwaitingFollowUp({ status: 'Action needed', edited: '2026-10-01T00:00:00+08:00' }, now), false)
 })
 
+test('uses Last Activity for an email deal even when Notion was edited recently', () => {
+  assert.equal(isAwaitingFollowUp({ status: 'Awaiting brand', last: '2026-10-30', edited: '2026-11-22T01:33:00Z' }, now), true)
+  assert.equal(isAwaitingFollowUp({ status: 'Awaiting brand', last: '2026-11-23', edited: '2026-10-01T00:00:00Z' }, now), false)
+})
+
 test('Follow up is a real status group on both boards', () => {
   assert.equal(FOLLOW_UP.key, FOLLOW_UP_STATUS)
   assert.equal(inGroup(FOLLOW_UP, { status: FOLLOW_UP_STATUS }), true)
@@ -20,7 +25,7 @@ test('Follow up is a real status group on both boards', () => {
   assert.equal(LIVE_GROUPS.some(group => group.key === FOLLOW_UP_STATUS), true)
 })
 
-test('rechecks Notion then writes Status and Last Activity for an eligible deal', async () => {
+test('rechecks Notion then writes Status without changing the conversation date', async () => {
   const originalFetch = globalThis.fetch
   const originalToken = process.env.NOTION_TOKEN
   const calls = []
@@ -29,8 +34,8 @@ test('rechecks Notion then writes Status and Last Activity for an eligible deal'
     id: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa',
     url: 'https://www.notion.so/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
     parent: { data_source_id: '8206590b-d48c-825b-ac32-07e2152ec3e1' },
-    last_edited_time: '2026-11-01T00:00:00+08:00',
-    properties: { Brand: { title: [{ plain_text: 'Sample brand' }] }, Status: { select: { name: 'Awaiting brand' } } },
+    last_edited_time: '2026-11-22T00:00:00+08:00',
+    properties: { Brand: { title: [{ plain_text: 'Sample brand' }] }, Status: { select: { name: 'Awaiting brand' } }, 'Last Activity': { date: { start: '2026-10-30' } } },
   }
   globalThis.fetch = async (url, options) => {
     calls.push({ url, method: options.method || 'GET', body: options.body && JSON.parse(options.body) })
@@ -43,7 +48,7 @@ test('rechecks Notion then writes Status and Last Activity for an eligible deal'
     assert.deepEqual(result.warnings, [])
     assert.equal(calls[2].method, 'PATCH')
     assert.deepEqual(calls[2].body.properties.Status, { select: { name: FOLLOW_UP_STATUS } })
-    assert.equal(calls[2].body.properties['Last Activity'].date.start, '2026-11-24')
+    assert.equal(calls[2].body.properties['Last Activity'], undefined)
   } finally {
     globalThis.fetch = originalFetch
     if (originalToken === undefined) delete process.env.NOTION_TOKEN
@@ -51,7 +56,7 @@ test('rechecks Notion then writes Status and Last Activity for an eligible deal'
   }
 })
 
-test('does not write when the page was edited after the query', async () => {
+test('does not write when Last Activity advanced after the query', async () => {
   const originalFetch = globalThis.fetch
   const originalToken = process.env.NOTION_TOKEN
   let calls = 0
@@ -60,11 +65,11 @@ test('does not write when the page was edited after the query', async () => {
     id: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa',
     url: 'https://www.notion.so/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
     parent: { data_source_id: '8206590b-d48c-825b-ac32-07e2152ec3e1' },
-    properties: { Brand: { title: [{ plain_text: 'Sample brand' }] }, Status: { select: { name: 'Awaiting brand' } } },
+    properties: { Brand: { title: [{ plain_text: 'Sample brand' }] }, Status: { select: { name: 'Awaiting brand' } }, 'Last Activity': { date: { start: '2026-10-30' } } },
   }
   globalThis.fetch = async () => {
     calls++
-    return { ok: true, json: async () => calls === 1 ? { results: [{ ...page, last_edited_time: '2026-11-01T00:00:00+08:00' }], has_more: false } : { ...page, last_edited_time: '2026-11-24T03:00:00+08:00' } }
+    return { ok: true, json: async () => calls === 1 ? { results: [page], has_more: false } : { ...page, properties: { ...page.properties, 'Last Activity': { date: { start: '2026-11-24' } } } } }
   }
   try {
     const result = await reconcileFollowUps(now)
