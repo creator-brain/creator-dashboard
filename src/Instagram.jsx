@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { Instagram } from 'lucide-react'
+import { IntegrationCard } from './IntegrationCard.jsx'
 import { api, normalizeInstagramHandle } from './model.js'
 
 function useInstagramStatus() {
@@ -15,40 +16,52 @@ function useInstagramStatus() {
   return { status, setStatus, error, setError }
 }
 
-function ConnectInstagram() {
-  return <a className="btn btn-primary btn-sm" href="/api/meta/auth/start">Connect Instagram</a>
+function UnlockInstagram({ onUnlock }) {
+  const [key, setKey] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+  async function unlock(event) {
+    event.preventDefault()
+    setBusy(true)
+    setError('')
+    try {
+      const status = await api('/meta/unlock', { method: 'POST', body: JSON.stringify({ key: key.trim() }) })
+      onUnlock(status)
+    } catch (reason) { setError(reason.message) }
+    finally { setBusy(false) }
+  }
+  return <form className="w-full space-y-2" onSubmit={unlock}>
+    <label className="block text-xs">Instagram inbox key
+      <input className="input input-bordered mt-1 w-full" type="password" autoComplete="current-password" value={key} onChange={event => setKey(event.target.value)} disabled={busy} />
+    </label>
+    <div className="flex justify-end"><button className="btn btn-primary btn-sm" type="submit" disabled={busy || !key.trim()}>{busy && <span className="loading loading-spinner loading-xs" />} Unlock Instagram inbox</button></div>
+    {error && <p className="text-sm text-error" role="alert">{error}</p>}
+  </form>
 }
 
-const loginMessages = {
-  cancelled: 'Instagram connection was cancelled.',
-  account: 'Select the Instagram professional account configured for this dashboard.',
-  storage: 'Instagram session storage is unavailable. Try connecting again.',
-  failed: 'Instagram could not complete the connection. Check the Meta app configuration and try again.',
-}
-
-export function InstagramIntegration({ loginResult }) {
+export function InstagramIntegration({ onUnlocked }) {
   const { status, setStatus, error, setError } = useInstagramStatus()
   const [busy, setBusy] = useState(false)
   async function disconnect() {
     setBusy(true)
     setError('')
     try {
-      await api('/meta/disconnect', { method: 'POST' })
-      setStatus(previous => ({ ...previous, connected: false, username: '' }))
+      await api('/meta/lock', { method: 'POST' })
+      setStatus(previous => ({ ...previous, connected: false }))
     } catch (reason) { setError(reason.message) }
     finally { setBusy(false) }
   }
-  return <section className="space-y-3 rounded-2xl border border-base-300 p-4">
-    <div className="flex items-center gap-3">
-      <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-purple-100 text-purple-700"><Instagram size={20} /></span>
-      <div><h3 className="font-semibold">Instagram</h3><p className="text-xs text-base-content/60">{status?.connected ? `Connected as @${status.username}` : 'Read DMs from linked deals.'}</p></div>
-    </div>
-    {status?.connected ? <button className="btn btn-outline btn-sm" disabled={busy} onClick={disconnect}>Disconnect Instagram</button>
-      : status?.configured ? <ConnectInstagram />
-      : status ? <p className="text-xs text-base-content/60">Instagram server setup is needed.</p> : null}
-    {error && <p className="text-sm text-error" role="alert">{error}</p>}
-    {loginMessages[loginResult] && <p className="text-sm text-base-content/75" role="status">{loginMessages[loginResult]}</p>}
-  </section>
+  return <IntegrationCard
+    name="Instagram"
+    icon={Instagram}
+    iconStyle="bg-purple-100 text-purple-700"
+    description="Read DMs from linked deals."
+    status={status?.connected ? 'connected' : status?.configured ? 'locked' : status ? 'setup' : error ? 'unavailable' : null}
+    action={status?.connected
+      ? <button className="btn btn-outline btn-sm" disabled={busy} onClick={disconnect}>{busy ? 'Locking…' : 'Lock Instagram inbox'}</button>
+      : status?.configured ? <UnlockInstagram onUnlock={next => { setStatus(next); onUnlocked() }} /> : null}
+    error={error}
+  />
 }
 
 const messageDate = date => date && Number.isFinite(Date.parse(date)) ? new Date(date).toLocaleString('en-SG', {
@@ -88,8 +101,8 @@ export async function syncInstagramLinks(onLinked) {
   if (failures) throw new Error(`Couldn’t link ${failures} Instagram deal${failures === 1 ? '' : 's'}. Refresh to try again.`)
 }
 
-export function InstagramPanel({ deal, onLinked }) {
-  const { status, error: statusError } = useInstagramStatus()
+export function InstagramPanel({ deal, onLinked, onUnlocked }) {
+  const { status, setStatus, error: statusError } = useInstagramStatus()
   const [conversation, setConversation] = useState(undefined)
   const [choices, setChoices] = useState(null)
   const [selected, setSelected] = useState('')
@@ -173,7 +186,7 @@ export function InstagramPanel({ deal, onLinked }) {
     <h3 className="section-title">Instagram conversation</h3>
     {(error || statusError) && <p className="text-sm text-error" role="alert">{error || statusError}</p>}
     {status && !status.configured && <p className="text-sm text-base-content/60">Instagram server setup is needed.</p>}
-    {status?.configured && !status.connected && <ConnectInstagram />}
+    {status?.configured && !status.connected && <UnlockInstagram onUnlock={next => { setStatus(next); onUnlocked() }} />}
     {status?.connected && conversation === undefined && (error
       ? <button className="btn btn-ghost btn-sm" type="button" disabled={busy} onClick={refresh}>Try again</button>
       : <span className="loading loading-spinner loading-sm" aria-label="Loading Instagram conversation" />)}
@@ -209,7 +222,7 @@ export function InstagramPanel({ deal, onLinked }) {
     {conversation && <>
       {conversation.username && <p className="text-sm font-medium">@{conversation.username}</p>}
       {!conversation.messages.length && <p className="text-sm text-base-content/60">No recent messages returned by Instagram.</p>}
-      {conversation.messages.map((message, index) => <details key={`${conversation.id}:${message.id}`} open={index === 0} className="rounded-xl border border-base-300 p-3">
+      {conversation.messages.map((message, index) => <details key={`${conversation.id}:${message.id}`} open={index === 0} className={`rounded-xl border p-3 ${message.outgoing ? 'message-outgoing' : 'border-base-300'}`}>
         <summary className="cursor-pointer text-sm font-medium">{message.outgoing ? 'You' : message.sender ? `@${message.sender}` : 'Instagram'} <time className="ml-1 text-xs font-normal opacity-65">{messageDate(message.date)}</time></summary>
         <p className="mt-2 whitespace-pre-wrap break-words text-sm">{message.text || 'No message text. View media or shares in Instagram.'}</p>
       </details>)}

@@ -47,6 +47,7 @@ button { cursor: pointer; }
 .tone-gray { --tone: #5a5c55; --tone-bg: #eeebe4; }
 .tone-blue { --tone: #2c5a7f; --tone-bg: #e3ecf2; }
 .tone-pink { --tone: #a8385e; --tone-bg: #f9e1e7; }
+.message-outgoing { background-color: #fff0f4; border-color: #f2d5df; }
 .tone-green { --tone: #355f2f; --tone-bg: #e3eed8; }
 .tone-chip { display: inline-flex; align-items: center; max-width: 100%; border-radius: 999px; padding: .16rem .5rem; background: var(--tone-bg); color: var(--tone); font-size: .68rem; font-weight: 600; line-height: 1.35; }
 .tone-dot { display: inline-block; width: .5rem; height: .5rem; flex: none; border-radius: 50%; background: var(--tone); }

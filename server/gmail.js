@@ -170,7 +170,7 @@ function bodyText(part, mime) {
   return (part.parts || []).map(child => bodyText(child, mime)).find(Boolean) || ''
 }
 
-export function summarizeThread(thread) {
+export function summarizeThread(thread, accountEmail) {
   const messages = (thread.messages || []).map(message => ({
     id: message.id,
     from: header(message, 'From'),
@@ -178,6 +178,7 @@ export function summarizeThread(thread) {
     subject: header(message, 'Subject'),
     date: Number(message.internalDate) || 0,
     sent: (message.labelIds || []).includes('SENT'),
+    outgoing: (message.labelIds || []).includes('SENT') || Boolean(accountEmail && address(header(message, 'From')).toLowerCase() === accountEmail.toLowerCase()),
     draft: (message.labelIds || []).includes('DRAFT'),
     body: currentMessageText(bodyText(message.payload || {}, 'text/plain') || htmlText(bodyText(message.payload || {}, 'text/html')) || message.snippet || ''),
     messageId: header(message, 'Message-ID'),

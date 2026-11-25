@@ -54,6 +54,16 @@ test('extracts plain text and reply headers from a Gmail thread', () => {
   assert.equal(result.messages[0].body, 'Hello from brand')
   assert.equal(result.messages[0].messageId, '<m1@example.com>')
   assert.equal(result.messages[0].sent, false)
+  assert.equal(result.messages[0].outgoing, false)
+})
+
+test('identifies outgoing Gmail messages from the connected address or Sent label', () => {
+  const thread = summarizeThread({ messages: [
+    { payload: { headers: [{ name: 'From', value: 'Creator <Creator@example.com>' }] } },
+    { labelIds: ['SENT'], payload: { headers: [{ name: 'From', value: 'Alias <alias@example.com>' }] } },
+    { payload: { headers: [{ name: 'From', value: 'Brand <brand@example.com>' }, { name: 'To', value: 'creator@example.com' }] } },
+  ] }, 'creator@example.com')
+  assert.deepEqual(thread.messages.map(message => message.outgoing), [true, true, false])
 })
 
 test('keeps the full body of an HTML-only email as safe text', () => {

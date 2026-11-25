@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { DATA_SOURCE_ID, INSTAGRAM_CONVERSATION, instagramContactHandle, instagramConversationId, notion, pageMarkdown, reconcileFollowUps, toDeal, unlinkedInstagramDeals, updateDeal } from './notion.js'
 import { normalizeInstagramHandle, sourceOf } from '../src/model.js'
-import { instagramAuthorize, instagramCallback, instagramConfigured, instagramConversation, instagramConversations, instagramDisconnect, instagramSession, validConversationId } from './instagram.js'
+import { instagramConfigured, instagramConversation, instagramConversations, instagramLock, instagramSession, instagramUnlock, validConversationId } from './instagram.js'
 import { gmailAuthorize, gmailCallback, gmailConfigured, gmailConnected, gmailDisconnect, gmailRequest, gmailThreadUrl, makeMessage, replyDetails, summarizeThread, threadIdFromUrl } from './gmail.js'
 import { validWebhookSignature, webhookChallenge } from './metaWebhook.js'
 
@@ -50,17 +50,15 @@ function sameSiteWrite(req, res, next) {
   } catch { res.status(403).json({ error: 'Request origin required.' }) }
 }
 app.post('/api/gmail/disconnect', sameSiteWrite, gmailDisconnect)
-app.get('/api/meta/auth/start', instagramAuthorize)
-app.get('/api/meta/auth/callback', instagramCallback)
-app.get('/api/meta/status', async (req, res) => {
-  const session = await instagramSession(req)
-  res.json({ configured: instagramConfigured(), connected: Boolean(session), username: session?.account.username || '' })
+app.get('/api/meta/status', (req, res) => {
+  res.json({ configured: instagramConfigured(), connected: Boolean(instagramSession(req)) })
 })
-app.post('/api/meta/disconnect', sameSiteWrite, instagramDisconnect)
+app.post('/api/meta/unlock', sameSiteWrite, instagramUnlock)
+app.post('/api/meta/lock', sameSiteWrite, instagramLock)
 
-async function requireInstagramSession(req, res, next) {
-  const session = await instagramSession(req)
-  if (!session) return res.status(401).json({ error: 'Connect Instagram in Integrations first.' })
+function requireInstagramSession(req, res, next) {
+  const session = instagramSession(req)
+  if (!session) return res.status(401).json({ error: 'Unlock the Instagram inbox in Integrations first.' })
   res.locals.instagram = session
   next()
 }
@@ -72,7 +70,7 @@ app.get('/api/meta/conversations', requireInstagramSession, async (req, res) => 
 })
 
 app.get('/api/meta/pending-links', async (req, res) => {
-  const session = await instagramSession(req)
+  const session = instagramSession(req)
   res.json({ pending: session ? await unlinkedInstagramDeals() : [] })
 })
 
@@ -131,9 +129,11 @@ async function linkedThread(req) {
 app.get('/api/deals/:id/gmail', async (req, res, next) => {
   try {
     const threadId = await linkedThread(req)
-    const thread = threadId ? summarizeThread(await gmailRequest(req, `/threads/${encodeURIComponent(threadId)}?format=full`)) : null
-    const profile = thread ? await gmailRequest(req, '/profile') : null
-    res.json({ thread, reply: thread ? replyDetails(thread, profile.emailAddress) : null })
+    if (!threadId) return res.json({ thread: null, reply: null })
+    const data = await gmailRequest(req, `/threads/${encodeURIComponent(threadId)}?format=full`)
+    const profile = await gmailRequest(req, '/profile')
+    const thread = summarizeThread(data, profile.emailAddress)
+    res.json({ thread, reply: replyDetails(thread, profile.emailAddress) })
   } catch (error) { next(error) }
 })
 app.post('/api/deals/:id/gmail/link', sameSiteWrite, async (req, res, next) => {

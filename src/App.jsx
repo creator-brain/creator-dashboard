@@ -1,3 +1,4 @@
+import { IntegrationCard } from './IntegrationCard.jsx'
 import { InstagramIntegration, InstagramPanel, syncInstagramLinks } from './Instagram.jsx'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import ReactMarkdown from 'react-markdown'
@@ -8,18 +9,29 @@ import { EMAIL_TEMPLATES, hasTemplateFields } from './emailTemplates.js'
 import { getMediaKit, removeMediaKit, saveMediaKit } from './mediaKit.js'
 
 const savedView = (() => { try { return JSON.parse(localStorage.getItem('cp-view') || '{}') } catch { return {} } })()
-const initialView = { board: savedView.board === 'live' ? 'live' : 'ugc', stage: '', sort: savedView.sort || 'last', hideEmpty: !!savedView.hideEmpty, collapsed: savedView.collapsed || [], sidebar: savedView.sidebar !== false }
+const initialView = { board: savedView.board === 'live' ? 'live' : 'ugc', stage: '', sort: savedView.sort || 'last', hideEmpty: !!savedView.hideEmpty, sidebar: savedView.sidebar !== false }
 const statusColor = status => STATUSES.find(group => group.key === status)?.color || 'gray'
 const apiPath = id => `/deals/${encodeURIComponent(id)}`
 
-function Filter({ label, values, selected, onChange }) {
+function Filter({ label, values, counts, selected, onChange }) {
   return <details className="dropdown">
     <summary className={`btn btn-sm rounded-full ${selected.length ? 'btn-primary' : 'btn-ghost border border-base-300'}`}><SlidersHorizontal size={14} />{selected.length ? `${label} · ${selected.length}` : label}<ChevronDown size={13} /></summary>
     <div className="dropdown-content z-20 mt-2 w-58 rounded-xl border border-base-300 bg-base-100 p-3 shadow-xl">
-      {values.map(value => <label key={value} className="flex cursor-pointer items-center gap-2 rounded-lg px-2 py-1.5 text-sm hover:bg-base-200"><input type="checkbox" className="checkbox checkbox-primary checkbox-xs" checked={selected.includes(value)} onChange={() => onChange(selected.includes(value) ? selected.filter(v => v !== value) : [...selected, value])} />{value}</label>)}
+      {values.map(value => <label key={value} className="flex cursor-pointer items-center gap-2 rounded-lg px-2 py-1.5 text-sm hover:bg-base-200"><input type="checkbox" className="checkbox checkbox-primary checkbox-xs" checked={selected.includes(value)} onChange={() => onChange(selected.includes(value) ? selected.filter(v => v !== value) : [...selected, value])} /><span className="flex-1">{value}</span>{counts ? <span className="text-xs tabular-nums text-base-content/55" aria-label={`${counts[value] || 0} deals`}>{counts[value] || 0}</span> : <span className="skeleton h-3 w-4" aria-hidden="true" />}</label>)}
       <button type="button" className="btn btn-ghost btn-xs mt-2 w-full" onClick={() => onChange([])}>Clear</button>
     </div>
   </details>
+}
+
+function DealSkeletons() {
+  return <div className="space-y-2" role="status" aria-label="Loading deals">
+    {[0, 1].map(index => <div key={index} aria-hidden="true" className="space-y-2.5 rounded-xl border border-base-300 bg-base-100 p-3">
+      <div className="skeleton h-4 w-3/5" />
+      <div className="flex gap-2"><div className="skeleton h-4 w-12 rounded-full" /><div className="skeleton h-4 w-16 rounded-full" /></div>
+      <div className="skeleton h-3 w-full" />
+      <div className="skeleton h-3 w-2/3" />
+    </div>)}
+  </div>
 }
 
 function SearchBox({ query, setQuery, results, onOpen, ready }) {
@@ -182,14 +194,14 @@ function GmailPanel({ deal, onLinked }) {
     <details className="rounded-lg border border-base-300 p-2"><summary className="cursor-pointer text-xs font-semibold">Saved media kit{mediaKit ? ` · ${mediaKit.name}` : ''}</summary><div className="mt-2 space-y-2 text-xs"><p className="text-base-content/60">Save one media kit on this device to attach it quickly to future replies.</p>{mediaKit && <p className="truncate" title={mediaKit.name}>{mediaKit.name} · {formatSize(mediaKit.size)}</p>}<div className="flex flex-wrap gap-2"><label className="btn btn-outline btn-xs">{mediaKit ? 'Replace media kit' : 'Choose media kit'}<input type="file" className="sr-only" disabled={kitBusy} onChange={event => { saveKit(event.target.files); event.target.value = '' }} /></label>{mediaKit && <button type="button" className="btn btn-ghost btn-xs" disabled={kitBusy} onClick={clearKit}>Remove saved kit</button>}</div></div></details>
     {!status ? <span className="loading loading-spinner loading-sm" /> : !status.configured ? <p className="text-sm text-base-content/60">Gmail setup is needed before you can read or reply here.</p> : !status.connected ? <div className="space-y-2"><p className="text-sm text-base-content/60">Connect your Google account to read this thread, save drafts and send replies.</p><a className="btn btn-primary btn-sm" href="/api/gmail/auth/start">Connect Gmail</a></div> : !deal.gmail || linking ? <form onSubmit={linkThread} className="space-y-2"><p className="text-sm text-base-content/60">Paste the Gmail conversation link or thread ID to attach all its messages to this Notion deal.</p><label className="block text-xs">Gmail conversation<input className="input input-bordered mt-1 w-full" type="text" value={linkInput} onChange={event => setLinkInput(event.target.value)} placeholder="Gmail conversation URL or thread ID" /></label><div className="flex gap-2"><button className="btn btn-primary btn-sm" disabled={!!busy || !linkInput.trim()} type="submit">{deal.gmail ? 'Replace conversation' : 'Link conversation'}</button>{deal.gmail && <button className="btn btn-ghost btn-sm" type="button" onClick={() => setLinking(false)}>Cancel</button>}</div></form> : <>
       <button className="btn btn-ghost btn-xs" type="button" onClick={() => setLinking(true)}>Change conversation</button>
-      {thread?.messages?.length ? <div ref={threadRef} className="max-h-80 space-y-2 overflow-y-auto rounded-xl border border-base-300 p-2">{thread.messages.map(mail => <details key={mail.id} open={mail.id === latestMessageId} className="rounded-lg bg-base-200 p-3 text-xs"><summary className="cursor-pointer font-semibold">{mail.from} <span className="float-right font-normal opacity-55">{mail.date ? new Date(mail.date).toLocaleDateString('en-SG') : ''}</span></summary><p className="mt-1 opacity-60">To: {mail.to}</p><p className="mt-2 whitespace-pre-wrap break-words leading-relaxed">{mail.body}</p></details>)}</div> : <p className="text-sm text-base-content/55">No messages found in the linked thread.</p>}
+      {thread?.messages?.length ? <div ref={threadRef} className="max-h-80 space-y-2 overflow-y-auto rounded-xl border border-base-300 p-2">{thread.messages.map(mail => <details key={mail.id} open={mail.id === latestMessageId} className={`rounded-lg p-3 text-xs ${mail.outgoing ? 'message-outgoing' : 'bg-base-200'}`}><summary className="cursor-pointer font-semibold">{mail.from} <span className="float-right font-normal opacity-55">{mail.date ? new Date(mail.date).toLocaleDateString('en-SG') : ''}</span></summary><p className="mt-1 opacity-60">To: {mail.to}</p><p className="mt-2 whitespace-pre-wrap break-words leading-relaxed">{mail.body}</p></details>)}</div> : <p className="text-sm text-base-content/55">No messages found in the linked thread.</p>}
       <div className="space-y-2 rounded-xl border border-base-300 p-3"><h4 className="text-sm font-semibold">Reply</h4><div><p className="mb-2 text-xs font-semibold">Start from a template</p><div className="flex flex-wrap gap-1.5">{EMAIL_TEMPLATES.map(template => <button key={template.id} type="button" className="btn btn-outline btn-xs" disabled={!!busy} onClick={() => applyTemplate(template)}>{template.label}</button>)}</div><p className="mt-2 text-[11px] text-base-content/55">Review and replace any [bracketed details] before saving a draft.</p></div><label className="block text-xs">To<input className="input input-bordered mt-1 w-full" type="email" value={form.to} onChange={event => setForm({ ...form, to: event.target.value })} /></label><label className="block text-xs">Subject<input className="input input-bordered mt-1 w-full" value={form.subject} readOnly /></label><label className="block text-xs">Message<textarea className="textarea textarea-bordered mt-1 min-h-32 w-full" value={form.body} onChange={event => setForm({ ...form, body: event.target.value })} /></label><AttachmentPicker files={attachments} mediaKit={mediaKit} onAdd={addAttachments} onRemove={index => setAttachments(files => files.filter((_, i) => i !== index))} disabled={!!busy} /><div className="flex gap-2"><button className="btn btn-outline btn-sm" disabled={!!busy || !form.to || !form.body.trim()} onClick={() => act('draft')}>Save draft</button><button className="btn btn-primary btn-sm" disabled={!!busy || !form.to || !form.body.trim()} onClick={() => act('send')}>Send email</button></div></div>
       <button className="btn btn-ghost btn-xs" disabled={!!busy} onClick={disconnect}>Disconnect Gmail</button>
     </>}{message && <p className={`text-sm ${/saved|sent/i.test(message) ? 'text-success' : 'text-error'}`} role="status">{message}</p>}
   </section>
 }
 
-function IntegrationsDrawer({ onClose, instagramResult }) {
+function IntegrationsDrawer({ onClose, onInstagramUnlocked }) {
   const [gmail, setGmail] = useState(null)
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
@@ -209,14 +221,24 @@ function IntegrationsDrawer({ onClose, instagramResult }) {
   return <><div className="fixed inset-0 z-40 bg-black/35" onClick={onClose} /><aside className="fixed inset-y-0 right-0 z-50 flex w-full max-w-md flex-col bg-base-100 shadow-2xl" role="dialog" aria-modal="true" aria-label="Integrations">
     <div className="flex items-start justify-between border-b border-base-300 p-5"><div><p className="eyebrow">Workspace</p><h2 className="section-title mt-1">Integrations</h2><p className="mt-1 text-sm text-base-content/55">Connect the places where brand conversations happen.</p></div><button className="btn btn-ghost btn-square btn-sm" aria-label="Close integrations" onClick={onClose}><X size={18} /></button></div>
     <div className="space-y-3 overflow-y-auto p-5">
-      <section className="rounded-2xl border border-base-300 p-4"><div className="flex items-start gap-3"><span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-rose-100 text-rose-700"><Mail size={20} /></span><div className="min-w-0 flex-1"><div className="flex flex-wrap items-center justify-between gap-2"><h3 className="font-semibold">Gmail</h3><span className={`badge badge-sm ${gmail?.connected ? 'badge-success' : 'badge-ghost'}`}>{gmail?.connected ? 'Connected' : gmail?.unavailable ? 'Unavailable' : gmail ? 'Not connected' : 'Checking'}</span></div><p className="mt-1 text-xs leading-relaxed text-base-content/60">Read linked threads, save drafts and send replies from your deals.</p>{gmail?.connected && <p className="mt-2 truncate text-xs font-medium" title={gmail.email}>{gmail.email}</p>}</div></div><div className="mt-4 flex justify-end">{gmail?.connected ? <button className="btn btn-outline btn-sm" disabled={busy} onClick={disconnectGmail}>{busy ? 'Disconnecting…' : 'Disconnect Gmail'}</button> : gmail?.configured ? <a className="btn btn-primary btn-sm" href="/api/gmail/auth/start">Connect Gmail</a> : gmail && !gmail.unavailable && <span className="text-xs text-base-content/55">Gmail server setup is needed.</span>}</div></section>
-      <InstagramIntegration loginResult={instagramResult} />
-      {error && <p className="text-sm text-error" role="alert">{error}</p>}
+      <IntegrationCard
+        name="Gmail"
+        icon={Mail}
+        iconStyle="bg-rose-100 text-rose-700"
+        description="Read linked threads, save drafts and send replies from your deals."
+        detail={gmail?.connected ? gmail.email : ''}
+        status={gmail?.unavailable ? 'unavailable' : gmail?.connected ? 'connected' : gmail?.configured ? 'disconnected' : gmail ? 'setup' : null}
+        action={gmail?.connected
+          ? <button className="btn btn-outline btn-sm" disabled={busy} onClick={disconnectGmail}>{busy ? 'Disconnecting…' : 'Disconnect Gmail'}</button>
+          : gmail?.configured ? <a className="btn btn-primary btn-sm" href="/api/gmail/auth/start">Connect Gmail</a> : null}
+        error={error}
+      />
+      <InstagramIntegration onUnlocked={onInstagramUnlocked} />
     </div>
   </aside></>
 }
 
-function DealDrawer({ deal, body, bodyError, onClose, onSave, onLinked }) {
+function DealDrawer({ deal, body, bodyError, onClose, onSave, onLinked, onInstagramUnlocked }) {
   const [draft, setDraft] = useState(null)
   useEffect(() => setDraft(deal ? { status: deal.status, type: deal.type, fee: deal.fee, next: deal.next, date: toDateInput(deal.deadlineStart), start: toTimeInput(deal.deadlineStart), end: toTimeInput(deal.deadlineEnd) } : null), [deal?.id])
   if (!deal || !draft) return null
@@ -235,7 +257,7 @@ function DealDrawer({ deal, body, bodyError, onClose, onSave, onLinked }) {
     <a className="link link-primary inline-flex items-center gap-1 text-sm" href={deal.url} target="_blank" rel="noopener noreferrer">Open in Notion <ExternalLink size={13} /></a>
     <section><h3 className="section-title mb-2">From the Notion page</h3>{bodyError ? <p className="text-sm text-error">{bodyError}</p> : body == null ? <span className="loading loading-spinner loading-sm" /> : <div className="prose prose-sm max-w-none"><ReactMarkdown remarkPlugins={[remarkGfm]}>{notes?.trim() || 'No notes yet.'}</ReactMarkdown></div>}</section>
     {deal.source === 'Email' && <GmailPanel deal={deal} onLinked={onLinked} />}
-    {deal.source === 'Instagram' && <InstagramPanel key={deal.id} deal={deal} onLinked={onLinked} />}
+    {deal.source === 'Instagram' && <InstagramPanel key={deal.id} deal={deal} onLinked={onLinked} onUnlocked={onInstagramUnlocked} />}
     </div></aside></>
 }
 
@@ -245,17 +267,7 @@ export default function App() {
   const [view, setView] = useState(initialView)
   const [query, setQuery] = useState('')
   const [filters, setFilters] = useState({ type: [], platform: [], source: [], kpi: '' })
-  const [instagramResult, setInstagramResult] = useState(() => {
-    const result = new URLSearchParams(window.location.search).get('instagram')
-    return ['connected', 'cancelled', 'account', 'storage', 'failed'].includes(result) ? result : null
-  })
-  const [drawer, setDrawer] = useState(instagramResult ? 'integrations' : null)
-  useEffect(() => {
-    if (!instagramResult) return
-    const url = new URL(window.location.href)
-    url.searchParams.delete('instagram')
-    window.history.replaceState(window.history.state, '', url)
-  }, [instagramResult])
+  const [drawer, setDrawer] = useState(null)
   const [body, setBody] = useState(null)
   const [bodyError, setBodyError] = useState('')
   const [log, setLog] = useState([])
@@ -267,7 +279,7 @@ export default function App() {
   const refreshing = useRef(null)
   const instagramSync = useRef(null)
 
-  useEffect(() => { try { localStorage.setItem('cp-view', JSON.stringify({ board: view.board, sort: view.sort, hideEmpty: view.hideEmpty, collapsed: view.collapsed, sidebar: view.sidebar })) } catch { /* Preferences are optional. */ } }, [view])
+  useEffect(() => { try { localStorage.setItem('cp-view', JSON.stringify({ board: view.board, sort: view.sort, hideEmpty: view.hideEmpty, sidebar: view.sidebar })) } catch { /* Preferences are optional. */ } }, [view])
   function refresh() {
     if (refreshing.current) return refreshing.current
     setLoad(previous => ({ ...previous, state: previous.at ? 'refreshing' : 'loading' }))
@@ -340,17 +352,28 @@ export default function App() {
     { key: 'stale', label: 'Gone quiet', icon: Send, test: isStale, tint: 'bg-emerald-100' },
     { key: 'pay', label: 'Payment pending', icon: Wallet, test: d => d.status === 'Completed - payment pending', tint: 'bg-violet-100' },
   ]
-  const visible = useMemo(() => scoped.filter(d => {
+  const filterBase = scoped.filter(d => {
     if (view.hideEmpty && !d.last && !d.next) return false
-    if (filters.type.length && !d.type.some(t => filters.type.includes(t))) return false
-    if (filters.platform.length && !d.platforms.some(p => filters.platform.includes(p))) return false
-    if (filters.source.length && !filters.source.includes(d.source)) return false
     if (filters.kpi && !metrics.find(m => m.key === filters.kpi)?.test(d)) return false
     return true
-  }), [scoped, view.hideEmpty, filters])
+  })
   const selectedGroup = groups.find(g => g.key === view.stage)
   const phases = selectedGroup ? [selectedGroup.phase] : view.stage === '@archive' ? ['Archive'] : view.board === 'live' ? ['Inbound', 'Scheduled', 'Wrap-up'] : ['Inbound', 'Production', 'Wrap-up']
-  const calendarDeals = visible.filter(d => view.stage === '@archive' ? CLOSED.has(d.status) : selectedGroup ? inGroup(selectedGroup, d) : !CLOSED.has(d.status))
+  const inStage = d => view.stage === '@archive' ? CLOSED.has(d.status) : selectedGroup ? inGroup(selectedGroup, d) : !CLOSED.has(d.status)
+  const counts = { type: Object.create(null), platform: Object.create(null), source: Object.create(null) }
+  const visible = filterBase.filter(deal => {
+    const matchesType = !filters.type.length || deal.type.some(value => filters.type.includes(value))
+    const matchesPlatform = !filters.platform.length || deal.platforms.some(value => filters.platform.includes(value))
+    const matchesSource = !filters.source.length || filters.source.includes(deal.source)
+    if (inStage(deal)) {
+      if (matchesPlatform && matchesSource) for (const value of new Set(deal.type)) counts.type[value] = (counts.type[value] || 0) + 1
+      if (matchesType && matchesSource) for (const value of new Set(deal.platforms)) counts.platform[value] = (counts.platform[value] || 0) + 1
+      if (matchesType && matchesPlatform) counts.source[deal.source] = (counts.source[deal.source] || 0) + 1
+    }
+    return matchesType && matchesPlatform && matchesSource
+  })
+  const calendarDeals = visible.filter(inStage)
+  const loadingDeals = load.state === 'loading'
   const activeDeal = drawer && drawer !== 'log' ? deals.find(d => d.id === drawer) : null
   const changeView = patch => setView(previous => ({ ...previous, ...patch }))
   const chooseStage = stage => { changeView({ stage }); setFilters(previous => ({ ...previous, kpi: '' })) }
@@ -358,7 +381,7 @@ export default function App() {
 
   return <div className="min-h-screen bg-base-200 text-base-content"><div className="flex min-h-screen">
     {view.sidebar && <aside className="sidebar hidden w-64 shrink-0 flex-col overflow-y-auto px-4 py-6 lg:flex">
-      <div className="mb-3 flex items-center gap-3 px-2"><span className="flex h-10 w-10 items-center justify-center rounded-full bg-rose-200 font-display text-lg font-bold text-primary">CP</span><div><b className="font-display text-lg">Collab Pipeline</b><p className="text-xs text-white/55">💌 Collab Tracker</p></div></div>
+      <h1 className="mb-3 px-2 font-display text-lg font-bold">Yandy's creator dashboard</h1>
       <button className="sidebar-link mb-8 border border-white/15 bg-white/5" onClick={() => setDrawer('integrations')}><Plug2 size={16} /> Integrations <ChevronRight size={15} className="ml-auto opacity-60" /></button>
       <p className="mb-3 px-3 text-[10px] font-bold uppercase tracking-[.2em] text-white/40">Pipeline</p>
       <button className="sidebar-link" onClick={() => chooseStage('')}><LayoutDashboard size={16} /> Deal board</button>
@@ -375,18 +398,47 @@ export default function App() {
     </aside>}
     <div className="min-w-0 flex-1"><header className="sticky top-0 z-30 flex min-h-17 items-center gap-3 border-b border-base-300 bg-base-200/95 px-4 backdrop-blur md:px-7"><button className="btn btn-ghost btn-square btn-sm hidden lg:inline-flex" aria-label="Toggle sidebar" onClick={() => changeView({ sidebar: !view.sidebar })}><Menu size={18} /></button><SearchBox query={query} setQuery={setQuery} results={searchResults} onOpen={setDrawer} ready={Boolean(load.at)} /><button className="btn btn-ghost btn-sm ml-auto gap-2 text-xs" disabled={load.state === 'loading' || load.state === 'refreshing'} onClick={refresh}><RefreshCw size={14} className={load.state === 'refreshing' ? 'animate-spin' : ''} /><span className="hidden sm:inline">{load.state === 'ready' ? `Live from Notion · ${load.at?.toLocaleTimeString('en-SG', { hour: '2-digit', minute: '2-digit' })}` : 'Refresh'}</span></button><button className="btn btn-ghost btn-sm gap-2 text-xs" aria-label="Integrations" onClick={() => setDrawer('integrations')}><Plug2 size={16} /><span className="hidden md:inline">Integrations</span></button></header>
     <main className="mx-auto max-w-[1800px] space-y-7 px-4 py-7 md:px-7"><div><p className="eyebrow">Your workspace</p><h1 className="font-display text-3xl font-semibold tracking-tight md:text-4xl">Good {new Date().getHours() < 12 ? 'morning' : new Date().getHours() < 18 ? 'afternoon' : 'evening'}.</h1><p className="mt-1 text-sm text-base-content/55">Your collaborations, live from Notion.</p></div>
-    {load.state === 'error' && <div className="alert alert-warning items-start"><CircleAlert size={20} /><div><b>Couldn’t load the tracker</b><p className="text-sm">{load.message}</p></div><button className="btn btn-sm" onClick={refresh}>Try again</button></div>}{load.warnings?.length > 0 && <div className="alert alert-warning items-start"><CircleAlert size={20} /><div><b>{load.warnings.length} follow-up update{load.warnings.length === 1 ? '' : 's'} failed in Notion</b><p className="text-sm">{load.warnings[0]}{load.warnings.length > 1 ? ` (+${load.warnings.length - 1} more)` : ''}</p></div><button className="btn btn-sm" onClick={refresh}>Retry</button></div>}{load.state === 'loading' && <div className="alert bg-base-100"><span className="loading loading-spinner loading-sm" /> Loading your collaborations from Notion…</div>}
-    {searchActive ? <SearchResults query={query} results={searchResults} onOpen={setDrawer} ready={Boolean(load.at)} /> : <>
+    {load.state === 'error' && <div className="alert alert-warning items-start"><CircleAlert size={20} /><div><b>Couldn’t load the tracker</b><p className="text-sm">{load.message}</p></div><button className="btn btn-sm" onClick={refresh}>Try again</button></div>}{load.warnings?.length > 0 && <div className="alert alert-warning items-start"><CircleAlert size={20} /><div><b>{load.warnings.length} follow-up update{load.warnings.length === 1 ? '' : 's'} failed in Notion</b><p className="text-sm">{load.warnings[0]}{load.warnings.length > 1 ? ` (+${load.warnings.length - 1} more)` : ''}</p></div><button className="btn btn-sm" onClick={refresh}>Retry</button></div>}
+    {searchActive ? (loadingDeals ? <div id="search-results" className="mx-auto w-full max-w-4xl"><DealSkeletons /></div> : <SearchResults query={query} results={searchResults} onOpen={setDrawer} ready={Boolean(load.at)} />) : <>
     {load.state === 'ready' && <div className="flex flex-wrap items-center gap-3 rounded-2xl bg-primary px-5 py-4 text-primary-content"><div className="rounded-full bg-white/15 p-2"><CalendarDays size={18} /></div><div className="flex-1"><b>{scoped.filter(isOverdue).length} overdue · {scoped.filter(isSoon).length} due this week</b><p className="text-xs text-white/65">{scoped.filter(d => d.status === 'New - not replied').length} new inquiries are waiting for a first reply.</p></div><button className="btn btn-sm border-0 bg-white text-primary" onClick={() => setFilters(previous => ({ ...previous, kpi: previous.kpi === 'overdue' ? '' : 'overdue' }))}>{filters.kpi === 'overdue' ? 'Show all' : 'Show overdue'}</button></div>}
-    <section className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6" aria-label="Summary">{metrics.map(metric => <button key={metric.key} className={`metric ${metric.tint} ${filters.kpi === metric.key ? 'ring-2 ring-primary' : ''}`} onClick={() => { setFilters(previous => ({ ...previous, kpi: previous.kpi === metric.key ? '' : metric.key })); changeView({ stage: '', collapsed: [] }) }}><metric.icon size={17} className="absolute right-4 top-4 opacity-45" /><span className="text-xs font-medium opacity-65">{metric.label}</span><b className="font-display text-3xl">{load.state === 'ready' ? scoped.filter(metric.test).length : '–'}</b></button>)}</section>
-    <div className="flex flex-wrap items-end justify-between gap-4"><div><div className="tabs tabs-box w-fit bg-base-100"><button className={`tab gap-2 ${view.board === 'live' ? 'tab-active' : ''}`} onClick={() => { changeView({ board: 'live', stage: '' }); setFilters(previous => ({ ...previous, kpi: '' })) }}><Video size={15} /> Livestreams <span className="badge badge-xs">{deals.filter(d => d.live && !CLOSED.has(d.status)).length}</span></button><button className={`tab gap-2 ${view.board === 'ugc' ? 'tab-active' : ''}`} onClick={() => { changeView({ board: 'ugc', stage: '' }); setFilters(previous => ({ ...previous, kpi: '' })) }}><Send size={15} /> UGC Videos <span className="badge badge-xs">{deals.filter(d => !d.live && !CLOSED.has(d.status)).length}</span></button></div><h2 className="section-title mt-4">{view.stage === '@archive' ? 'Archive' : selectedGroup?.label || selectedGroup?.key || 'Deal board'}</h2></div><div className="flex flex-wrap items-center gap-2"><Filter label="Deal type" values={TYPES} selected={filters.type} onChange={value => setFilters({ ...filters, type: value })} /><Filter label="Platform" values={PLATFORMS} selected={filters.platform} onChange={value => setFilters({ ...filters, platform: value })} /><Filter label="Source" values={SOURCES} selected={filters.source} onChange={value => setFilters({ ...filters, source: value })} /><select className="select select-bordered select-sm w-auto rounded-full" aria-label="Sort cards" value={view.sort} onChange={e => changeView({ sort: e.target.value })}><option value="last">Last activity</option><option value="deadline">Deadline</option><option value="edited">Last edited</option><option value="brand">Brand A–Z</option></select><label className="flex items-center gap-2 text-xs"><input type="checkbox" className="checkbox checkbox-xs" checked={view.hideEmpty} onChange={e => changeView({ hideEmpty: e.target.checked })} /> Hide empty</label></div></div>
+    <section className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6" aria-label="Summary">{metrics.map(metric => <button key={metric.key} className={`metric ${metric.tint} ${filters.kpi === metric.key ? 'ring-2 ring-primary' : ''}`} onClick={() => { setFilters(previous => ({ ...previous, kpi: previous.kpi === metric.key ? '' : metric.key })); changeView({ stage: '' }) }}><metric.icon size={17} className="absolute right-4 top-4 opacity-45" /><span className="text-xs font-medium opacity-65">{metric.label}</span><b className="font-display text-3xl">{load.state === 'ready' ? scoped.filter(metric.test).length : '–'}</b></button>)}</section>
+    <div className="flex flex-wrap items-end justify-between gap-4"><div><div className="tabs tabs-box w-fit bg-base-100"><button className={`tab gap-2 ${view.board === 'live' ? 'tab-active' : ''}`} onClick={() => { changeView({ board: 'live', stage: '' }); setFilters(previous => ({ ...previous, kpi: '' })) }}><Video size={15} /> Livestreams <span className="badge badge-xs">{deals.filter(d => d.live && !CLOSED.has(d.status)).length}</span></button><button className={`tab gap-2 ${view.board === 'ugc' ? 'tab-active' : ''}`} onClick={() => { changeView({ board: 'ugc', stage: '' }); setFilters(previous => ({ ...previous, kpi: '' })) }}><Send size={15} /> UGC Videos <span className="badge badge-xs">{deals.filter(d => !d.live && !CLOSED.has(d.status)).length}</span></button></div><h2 className="section-title mt-4">{view.stage === '@archive' ? 'Archive' : selectedGroup?.label || selectedGroup?.key || 'Deal board'}</h2></div><div className="flex flex-wrap items-center gap-2"><Filter label="Deal type" values={TYPES} counts={loadingDeals ? null : counts.type} selected={filters.type} onChange={value => setFilters({ ...filters, type: value })} /><Filter label="Platform" values={PLATFORMS} counts={loadingDeals ? null : counts.platform} selected={filters.platform} onChange={value => setFilters({ ...filters, platform: value })} /><Filter label="Source" values={SOURCES} counts={loadingDeals ? null : counts.source} selected={filters.source} onChange={value => setFilters({ ...filters, source: value })} /><select className="select select-bordered select-sm w-auto rounded-full" aria-label="Sort cards" value={view.sort} onChange={e => changeView({ sort: e.target.value })}><option value="last">Last activity</option><option value="deadline">Deadline</option><option value="edited">Last edited</option><option value="brand">Brand A–Z</option></select><label className="flex items-center gap-2 text-xs"><input type="checkbox" className="checkbox checkbox-xs" checked={view.hideEmpty} onChange={e => changeView({ hideEmpty: e.target.checked })} /> Hide empty</label></div></div>
     <div className="flex gap-2 overflow-x-auto pb-2 lg:hidden"><button className="btn btn-sm" onClick={() => chooseStage('')}>All</button>{groups.map(group => <button key={group.key} className={`tone-chip tone-${group.color} shrink-0 ${view.stage === group.key ? 'ring-2 ring-primary' : ''}`} onClick={() => chooseStage(group.key)}>{group.label || group.key}</button>)}<button className="btn btn-sm" onClick={() => chooseStage('@archive')}>Archive</button><button className="btn btn-sm" onClick={() => setDrawer('log')}>Writes</button></div>
-    <div className={`board-phases ${selectedGroup ? 'solo' : ''}`}>{phases.map(phase => { const phaseGroups = selectedGroup ? [selectedGroup] : groups.filter(g => g.phase === phase); return <section key={phase} className="board-phase"><div className="mb-3 flex items-center gap-2"><span className="eyebrow">{phase}</span><span className="text-xs text-base-content/40">{visible.filter(d => phaseGroups.some(g => inGroup(g, d))).length} deals</span></div><div className="board-phase-columns flex gap-3 pb-3">{phaseGroups.map(group => { const items = sortDeals(visible.filter(d => inGroup(group, d)), view.sort); const collapsed = view.collapsed.includes(group.key) && !selectedGroup; return <div key={group.key} className={`board-column ${selectedGroup ? 'solo' : ''} ${collapsed ? 'w-14 min-w-14' : selectedGroup ? 'min-w-70 max-w-2xl flex-1' : 'w-68 min-w-68'}`} onDragOver={event => event.preventDefault()} onDrop={event => drop(event, group)}><div className="flex items-center justify-between gap-2 border-b border-base-300 px-3 py-3"><span className={`tone-chip tone-${group.color}`}>{collapsed ? '·' : group.label || group.key}</span>{!collapsed && <span className="text-xs opacity-45">{items.length}</span>}<button className="btn btn-ghost btn-square btn-xs" aria-label={collapsed ? 'Expand column' : 'Collapse column'} onClick={() => changeView({ collapsed: collapsed ? view.collapsed.filter(k => k !== group.key) : [...view.collapsed, group.key] })}><ChevronLeft size={14} className={collapsed ? 'rotate-180' : ''} /></button></div>{!collapsed && <div className={`board-column-body min-h-24 space-y-2 p-2 ${dragId ? 'bg-primary/5' : ''}`}>{group.key === FOLLOW_UP_STATUS && <p className="px-2 pt-1 text-[11px] leading-snug text-base-content/45">Automatically moved here 14 days after the last recorded activity. Status saved to Notion.</p>}{items.length ? items.map(deal => <DealCard key={deal.id} deal={deal} onOpen={setDrawer} onDrag={setDragId} />) : <div className="p-5 text-center text-xs text-base-content/35">Drop a card here</div>}</div>}</div> })}</div></section> })}</div>
+    <div className={`board-phases ${selectedGroup ? 'solo' : ''}`} aria-busy={loadingDeals}>
+      {phases.map(phase => {
+        const phaseGroups = selectedGroup ? [selectedGroup] : groups.filter(group => group.phase === phase)
+        const phaseCount = visible.filter(deal => phaseGroups.some(group => inGroup(group, deal))).length
+        return <section key={phase} className="board-phase">
+          <div className="mb-3 flex items-center gap-2">
+            <span className="eyebrow">{phase}</span>
+            {loadingDeals ? <span className="skeleton h-3 w-10" aria-hidden="true" /> : <span className="text-xs text-base-content/40">{phaseCount} deals</span>}
+          </div>
+          <div className="board-phase-columns flex gap-3 pb-3">
+            {phaseGroups.map(group => {
+              const items = sortDeals(visible.filter(deal => inGroup(group, deal)), view.sort)
+              return <div key={group.key} className={`board-column ${selectedGroup ? 'solo min-w-70 max-w-2xl flex-1' : 'w-68 min-w-68'}`}
+                onDragOver={event => event.preventDefault()} onDrop={event => drop(event, group)}>
+                <div className="flex items-center gap-2 border-b border-base-300 px-3 py-3">
+                  <span className={`tone-chip tone-${group.color}`}>{group.label || group.key}</span>
+                  {loadingDeals ? <span className="skeleton h-3 w-4" aria-hidden="true" /> : <span className="text-xs tabular-nums text-base-content/55" aria-label={`${items.length} deals`}>{items.length}</span>}
+                </div>
+                <div className={`board-column-body min-h-24 space-y-2 p-2 ${dragId ? 'bg-primary/5' : ''}`}>
+                  {loadingDeals ? <DealSkeletons /> : <>
+                    {group.key === FOLLOW_UP_STATUS && <p className="px-2 pt-1 text-[11px] leading-snug text-base-content/45">Automatically moved here 14 days after the last recorded activity. Status saved to Notion.</p>}
+                    {items.length ? items.map(deal => <DealCard key={deal.id} deal={deal} onOpen={setDrawer} onDrag={setDragId} />) : <div className="p-5 text-center text-xs text-base-content/35">Drop a card here</div>}
+                  </>}
+                </div>
+              </div>
+            })}
+          </div>
+        </section>
+      })}
+    </div>
     <Calendar deals={calendarDeals} month={month} setMonth={setMonth} onOpen={setDrawer} ready={load.state === 'ready'} />
     </>}
     </main></div></div>
-    {activeDeal && <DealDrawer deal={activeDeal} body={body} bodyError={bodyError} onClose={() => setDrawer(null)} onSave={save} onLinked={linked => setDeals(items => items.map(item => item.id === linked.id ? { ...linked, live: isLive(linked), source: sourceOf(linked) } : item))} />}
-    {drawer === 'integrations' && <IntegrationsDrawer instagramResult={instagramResult} onClose={() => { setDrawer(null); setInstagramResult(null) }} />}
+    {activeDeal && <DealDrawer deal={activeDeal} body={body} bodyError={bodyError} onClose={() => setDrawer(null)} onSave={save} onInstagramUnlocked={refresh} onLinked={linked => setDeals(items => items.map(item => item.id === linked.id ? { ...linked, live: isLive(linked), source: sourceOf(linked) } : item))} />}
+    {drawer === 'integrations' && <IntegrationsDrawer onInstagramUnlocked={refresh} onClose={() => setDrawer(null)} />}
     {drawer === 'log' && <><div className="fixed inset-0 z-40 bg-black/35" onClick={() => setDrawer(null)} /><aside className="fixed inset-y-0 right-0 z-50 w-full max-w-md overflow-y-auto bg-base-100 p-5 shadow-2xl" role="dialog" aria-label="Notion writes"><div className="mb-5 flex items-center justify-between"><h2 className="section-title">Notion writes</h2><button className="btn btn-ghost btn-square btn-sm" onClick={() => setDrawer(null)}><X size={18} /></button></div><p className="mb-5 text-xs text-base-content/60">Every edit is sent to the Collab Tracker page in Notion. Failed changes are undone on the board.</p>{log.length ? log.map(entry => <div key={entry.id} className="mb-3 rounded-xl border border-base-300 p-3 text-sm"><div className="flex justify-between"><b>{entry.brand}</b><span className={`badge badge-sm ${entry.status === 'Failed' ? 'badge-error' : entry.status === 'Saved' ? 'badge-success' : 'badge-warning'}`}>{entry.status}</span></div><p className="mt-1 text-xs opacity-60">{entry.prop} · {entry.at.toLocaleTimeString('en-SG')} · {Array.isArray(entry.value) ? entry.value.join(', ') : typeof entry.value === 'object' ? JSON.stringify(entry.value) : entry.value}</p>{entry.error && <p className="mt-1 text-xs text-error">{entry.error}</p>}</div>) : <p className="text-sm opacity-50">No changes yet.</p>}</aside></>}
     {notice && <div className="toast toast-end z-[60]"><div className="alert alert-error max-w-sm text-sm"><span>{notice}</span><button className="btn btn-ghost btn-xs" aria-label="Dismiss" onClick={() => setNotice('')}><X size={14} /></button></div></div>}
   </div>

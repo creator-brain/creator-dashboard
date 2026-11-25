@@ -2,12 +2,12 @@ import assert from 'node:assert/strict'
 import { once } from 'node:events'
 import { test } from 'node:test'
 
-test('Instagram OAuth gates reads and saves the selected inbox conversation to Notion', async t => {
+test('Instagram inbox unlock gates reads and saves the selected inbox conversation to Notion', async t => {
   const account = { id: '12345', username: 'creator' }
   const pageId = 'a'.repeat(32)
   const conversationId = 'instagram-thread'
   const tracker = '8206590b-d48c-825b-ac32-07e2152ec3e1'
-  const storage = new Map()
+  const inboxKey = 'a'.repeat(64)
   const instagramField = 'Instagram Conversation ID'
   const page = {
     id: pageId, parent: { data_source_id: tracker },
@@ -24,26 +24,15 @@ test('Instagram OAuth gates reads and saves the selected inbox conversation to N
       { id: 'new', created_time: '2026-11-21T17:00:00Z', from: { id: '67890', username: 'brand' }, message: 'Thanks!' }] },
   }
   Object.assign(process.env, {
-    VERCEL: '1', META_CLIENT_ID: 'app', META_CLIENT_SECRET: 'secret', META_CONFIG_ID: 'configuration',
-    META_REDIRECT_URI: 'https://dashboard.example/api/meta/auth/callback', META_APP_ORIGIN: 'https://dashboard.example',
-    META_IG_ACCOUNT_ID: account.id, META_SESSION_REDIS_URL: 'https://redis.example', META_SESSION_REDIS_TOKEN: 'storage-token',
+    VERCEL: '1', META_ACCESS_TOKEN: 'meta-token', META_IG_ACCOUNT_ID: account.id, META_INBOX_KEY: inboxKey,
     NOTION_TOKEN: 'notion-token',
   })
   const liveFetch = globalThis.fetch
   const stub = t.mock.method(globalThis, 'fetch', async (input, options) => {
     const url = new URL(input)
-    if (url.hostname === 'redis.example') {
-      const [command, key, value] = JSON.parse(options.body)
-      if (command === 'SET') storage.set(key, value)
-      if (command === 'DEL') storage.delete(key)
-      return Response.json({ result: command === 'GET' ? storage.get(key) || null : 'OK' })
-    }
     if (url.hostname === 'graph.facebook.com') {
       const path = url.pathname
-      if (path.endsWith('/oauth/access_token')) return Response.json({ access_token: 'meta-token' })
       assert.equal(options.headers.Authorization, 'Bearer meta-token')
-      if (path.endsWith('/assigned_instagram_accounts')) return Response.json({ data: [account] })
-      if (path.endsWith('/me')) return Response.json({ client_business_id: 'portfolio' })
       if (path.endsWith('/12345/conversations')) {
         const after = url.searchParams.get('after')
         return Response.json({ data: [thread], paging: after ? {} : { next: 'next', cursors: { after: 'cursor' } } })
@@ -72,25 +61,22 @@ test('Instagram OAuth gates reads and saves the selected inbox conversation to N
 
   assert.equal((await request('/deals/' + pageId)).status, 401)
   assert.equal(stub.mock.callCount(), 0)
-  const wrongHost = await request('/auth/start')
-  assert.equal(wrongHost.headers.get('location'), 'https://dashboard.example/api/meta/auth/start')
-  assert.equal(wrongHost.headers.get('set-cookie'), null)
-  process.env.META_REDIRECT_URI = `https://127.0.0.1:${server.address().port}/api/meta/auth/callback`
-  const start = await request('/auth/start')
-  const state = new URL(start.headers.get('location')).searchParams.get('state')
-  const stateHeaders = { cookie: cookie(start, 'cp_meta_state=') }
-  assert.equal((await request('/auth/callback?code=sample&state=bad', { headers: stateHeaders })).status, 400)
+  const unlock = (key, requestOrigin = origin) => request('/unlock', {
+    method: 'POST', headers: { origin: requestOrigin, 'content-type': 'application/json' }, body: JSON.stringify({ key }),
+  })
+  assert.equal((await unlock(inboxKey, 'https://unrelated.example')).status, 403)
+  assert.equal((await unlock('b'.repeat(64))).status, 401)
   assert.equal(stub.mock.callCount(), 0)
-  const cancelled = await request('/auth/callback?error=access_denied&state=' + state, { headers: stateHeaders })
-  assert.equal(cancelled.headers.get('location'), 'https://dashboard.example/?instagram=cancelled')
-  assert.equal(stub.mock.callCount(), 0)
-  const callback = await request('/auth/callback?code=sample&state=' + state, { headers: stateHeaders })
-  assert.equal(callback.status, 302)
-  assert.equal(callback.headers.get('location'), 'https://dashboard.example/?instagram=connected')
-  const session = cookie(callback, 'cp_meta_session=')
+  const success = await unlock(inboxKey)
+  assert.equal(success.status, 200)
+  const session = cookie(success, 'cp_meta_inbox=')
   assert.ok(!session.includes('meta-token'))
+  assert.ok(!session.includes(inboxKey))
+  assert.match(success.headers.get('set-cookie'), /HttpOnly; Secure; SameSite=Strict/i)
   const headers = { cookie: session, origin, 'content-type': 'application/json' }
-  assert.deepEqual(await (await request('/status', { headers })).json(), { configured: true, connected: true, username: 'creator' })
+  const forged = session.slice(0, -1) + (session.endsWith('A') ? 'B' : 'A')
+  assert.equal((await request('/conversations', { headers: { cookie: forged } })).status, 401)
+  assert.deepEqual(await (await request('/status', { headers })).json(), { configured: true, connected: true })
   const choices = await (await request('/conversations', { headers })).json()
   assert.equal(choices.conversations[0].username, 'brand')
   assert.equal(choices.after, 'cursor')
@@ -110,6 +96,10 @@ test('Instagram OAuth gates reads and saves the selected inbox conversation to N
   assert.equal(page.properties[instagramField].rich_text[0].text.content, conversationId)
   const { conversation } = await (await request('/deals/' + pageId, { headers })).json()
   assert.deepEqual(conversation.messages.map(message => message.id), ['new', 'old'])
-  assert.equal((await request('/disconnect', { method: 'POST', headers })).status, 200)
+  const locked = await request('/lock', { method: 'POST', headers })
+  assert.equal(locked.status, 200)
+  assert.match(locked.headers.get('set-cookie'), /^cp_meta_inbox=;/)
+  process.env.META_INBOX_KEY = 'c'.repeat(64)
+  assert.equal((await request('/deals/' + pageId, { headers })).status, 401)
   assert.equal((await request('/deals/' + pageId, { headers })).status, 401)
 })

@@ -1,43 +1,26 @@
-import { randomBytes, timingSafeEqual } from 'node:crypto'
+import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto'
 
 const graph = 'https://graph.facebook.com/v27.0'
-const stateCookie = 'cp_meta_state'
-const sessionCookie = 'cp_meta_session'
+const sessionCookie = 'cp_meta_inbox'
 const sessionSeconds = 7 * 24 * 60 * 60
-const localSessions = new Map()
-
 const failure = (message, status) => Object.assign(new Error(message), { status })
-const cookieOptions = () => ({ httpOnly: true, sameSite: 'lax', secure: process.env.META_REDIRECT_URI?.startsWith('https:'), path: '/api/meta' })
-const readCookie = (req, name) => req.get('cookie')?.split(';').map(part => part.trim()).find(part => part.startsWith(`${name}=`))?.slice(name.length + 1)
-const randomId = () => randomBytes(32).toString('hex')
-const validSessionId = value => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value)
+const cookieOptions = req => ({ httpOnly: true, sameSite: 'strict', secure: Boolean(process.env.VERCEL) || req.secure, path: '/api/meta' })
+const readSession = req => req.get('cookie')?.split(';').map(part => part.trim()).find(part => part.startsWith(sessionCookie + '='))?.slice(sessionCookie.length + 1)
+const digest = value => createHash('sha256').update(value).digest()
+const matches = (left, right) => timingSafeEqual(digest(left), digest(right))
+
 export const validConversationId = value => typeof value === 'string' && /^[\w=-]{1,512}$/.test(value)
 
 export function instagramConfigured() {
-  const { META_CLIENT_ID, META_CLIENT_SECRET, META_CONFIG_ID, META_REDIRECT_URI, META_IG_ACCOUNT_ID, META_SESSION_REDIS_URL, META_SESSION_REDIS_TOKEN } = process.env
-  return Boolean(META_CLIENT_ID && META_CLIENT_SECRET && META_CONFIG_ID && META_REDIRECT_URI && /^\d+$/.test(META_IG_ACCOUNT_ID || '') &&
-    (!process.env.VERCEL || (META_REDIRECT_URI.startsWith('https:') && META_SESSION_REDIS_URL && META_SESSION_REDIS_TOKEN)))
+  const { META_ACCESS_TOKEN, META_IG_ACCOUNT_ID, META_INBOX_KEY } = process.env
+  return Boolean(META_ACCESS_TOKEN && /^\d+$/.test(META_IG_ACCOUNT_ID || '') && /^[a-f0-9]{64}$/i.test(META_INBOX_KEY || ''))
 }
 
-async function sessionCommand(command, id, session) {
-  const key = `collab-pipeline:instagram:${id}`
-  const { META_SESSION_REDIS_URL, META_SESSION_REDIS_TOKEN } = process.env
-  if (META_SESSION_REDIS_URL && META_SESSION_REDIS_TOKEN) {
-    const args = command === 'SET' ? [command, key, JSON.stringify(session), 'EX', sessionSeconds] : [command, key]
-    const response = await fetch(META_SESSION_REDIS_URL, {
-      method: 'POST', redirect: 'error', signal: AbortSignal.timeout(8000),
-      headers: { Authorization: `Bearer ${META_SESSION_REDIS_TOKEN}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify(args),
-    }).catch(() => { throw failure('Instagram session storage is unavailable.', 503) })
-    const data = await response.json().catch(() => null)
-    if (!response.ok || !data || data.error) throw failure('Instagram session storage is unavailable.', 503)
-    return command === 'GET' && data.result ? JSON.parse(data.result) : null
-  }
-  if (process.env.VERCEL) throw failure('Instagram session storage is not configured.', 503)
-  for (const [key, entry] of localSessions) if (entry.expires <= Date.now()) localSessions.delete(key)
-  if (command === 'SET') localSessions.set(key, { session, expires: Date.now() + sessionSeconds * 1000 })
-  if (command === 'DEL') localSessions.delete(key)
-  return localSessions.get(key)?.session || null
+function signature(payload) {
+  const signingKey = createHmac('sha256', process.env.META_INBOX_KEY).update('collab-pipeline:instagram-inbox:v1').digest()
+  return createHmac('sha256', signingKey)
+    .update(JSON.stringify([process.env.META_IG_ACCOUNT_ID, digest(process.env.META_ACCESS_TOKEN).toString('hex'), payload]))
+    .digest('base64url')
 }
 
 async function graphRequest(path, params, token) {
@@ -47,87 +30,35 @@ async function graphRequest(path, params, token) {
     redirect: 'error', signal: AbortSignal.timeout(8000),
   }).catch(() => { throw failure('Could not reach Instagram. Try again.', 502) })
   const data = await response.json().catch(() => null)
-  if (data?.error?.code === 190 && token) throw failure('Instagram authorization expired. Disconnect and connect again.', 401)
+  if (data?.error?.code === 190 && token) throw failure('The Meta access token expired or was revoked. Update it on the server.', 401)
   if (!response.ok || !data || data.error) throw failure('Meta could not complete the Instagram request. Check the account and messaging permissions.', 502)
   return data
 }
 
-export async function instagramSession(req) {
-  const id = readCookie(req, sessionCookie)
-  if (!instagramConfigured() || !validSessionId(id)) return null
-  const session = await sessionCommand('GET', id)
-  return session?.account.id === process.env.META_IG_ACCOUNT_ID && session.configId === process.env.META_CONFIG_ID ? session : null
+export function instagramSession(req) {
+  if (!instagramConfigured()) return null
+  const cookie = readSession(req)
+  if (!cookie || !/^\d{10}\.[a-f0-9]{32}\.[A-Za-z0-9_-]{43}$/.test(cookie)) return null
+  const [expires, nonce, provided] = cookie.split('.')
+  if (Number(expires) <= Math.floor(Date.now() / 1000) || !matches(provided, signature(expires + '.' + nonce))) return null
+  return { token: process.env.META_ACCESS_TOKEN, account: { id: process.env.META_IG_ACCOUNT_ID } }
 }
 
-export function instagramAuthorize(req, res) {
+export async function instagramUnlock(req, res) {
   if (!instagramConfigured()) throw failure('Instagram server setup is required.', 503)
-  const callback = new URL(process.env.META_REDIRECT_URI)
-  if (req.get('host') !== callback.host) return res.redirect(new URL('/api/meta/auth/start', callback).href)
-  const state = randomId()
-  res.cookie(stateCookie, state, { ...cookieOptions(), maxAge: 10 * 60_000 })
-  const params = new URLSearchParams({
-    client_id: process.env.META_CLIENT_ID,
-    config_id: process.env.META_CONFIG_ID,
-    redirect_uri: process.env.META_REDIRECT_URI,
-    response_type: 'code', state, prompt: 'login',
-  })
-  res.redirect(`https://www.facebook.com/dialog/oauth?${params}`)
+  const key = req.body?.key
+  if (typeof key !== 'string' || key.length !== 64 || !matches(key, process.env.META_INBOX_KEY)) {
+    throw failure('Incorrect Instagram inbox key.', 401)
+  }
+  const accountId = process.env.META_IG_ACCOUNT_ID
+  await graphRequest(`/${accountId}/conversations`, { platform: 'instagram', fields: 'id', limit: '1' }, process.env.META_ACCESS_TOKEN)
+  const payload = `${Math.floor(Date.now() / 1000) + sessionSeconds}.${randomBytes(16).toString('hex')}`
+  res.cookie(sessionCookie, payload + '.' + signature(payload), { ...cookieOptions(req), maxAge: sessionSeconds * 1000 })
+  res.json({ configured: true, connected: true })
 }
 
-export async function instagramCallback(req, res) {
-  const { state, code } = req.query
-  const expected = readCookie(req, stateCookie)
-  res.clearCookie(stateCookie, cookieOptions())
-  if (!instagramConfigured() || !validSessionId(state) || !validSessionId(expected) || !timingSafeEqual(Buffer.from(state), Buffer.from(expected))) {
-    throw failure('Instagram login expired or could not be verified. Start again from Integrations.', 400)
-  }
-  const redirect = new URL('/', process.env.META_APP_ORIGIN || process.env.META_REDIRECT_URI)
-  const finish = result => {
-    redirect.searchParams.set('instagram', result)
-    return res.redirect(redirect.href)
-  }
-  if (req.query.error === 'access_denied') return finish('cancelled')
-  if (req.query.error) return finish('failed')
-  if (typeof code !== 'string' || !code) throw failure('Meta did not return an Instagram authorization code.', 400)
-  try {
-    const session = await exchangeInstagramCode(code)
-    const oldId = readCookie(req, sessionCookie)
-    const id = randomId()
-    await sessionCommand('SET', id, session)
-    if (validSessionId(oldId)) await sessionCommand('DEL', oldId)
-    res.cookie(sessionCookie, id, { ...cookieOptions(), maxAge: sessionSeconds * 1000 })
-    return finish('connected')
-  } catch (error) {
-    if (error.status === 403) return finish('account')
-    if (error.status === 503) return finish('storage')
-    return finish('failed')
-  }
-}
-
-async function exchangeInstagramCode(code) {
-  const { access_token: token } = await graphRequest('/oauth/access_token', {
-    client_id: process.env.META_CLIENT_ID, client_secret: process.env.META_CLIENT_SECRET,
-    redirect_uri: process.env.META_REDIRECT_URI, code,
-  })
-  if (!token) throw failure('Meta did not return an Instagram access token.', 502)
-  const seenCursors = new Set()
-  let account, after
-  do {
-    if (seenCursors.has(after)) throw failure('Meta returned a repeated account page.', 502)
-    seenCursors.add(after)
-    const result = await graphRequest('/me/assigned_instagram_accounts', { fields: 'id,username', ...(after ? { after } : {}) }, token)
-    account = result.data?.find(item => item.id === process.env.META_IG_ACCOUNT_ID)
-    after = result.paging?.next ? result.paging.cursors?.after : null
-  } while (!account && after)
-  if (!account) throw failure('Authorize the Instagram professional account configured for this dashboard.', 403)
-  const profile = await graphRequest('/me', { fields: 'client_business_id' }, token)
-  return { token, account, businessId: profile.client_business_id, configId: process.env.META_CONFIG_ID }
-}
-
-export async function instagramDisconnect(req, res) {
-  const id = readCookie(req, sessionCookie)
-  if (validSessionId(id)) await sessionCommand('DEL', id)
-  res.clearCookie(sessionCookie, cookieOptions()).json({ connected: false })
+export function instagramLock(req, res) {
+  res.clearCookie(sessionCookie, cookieOptions(req)).json({ connected: false })
 }
 
 const counterpart = (conversation, accountId) => conversation.participants?.data?.find(person => person.id !== accountId)?.username || ''
