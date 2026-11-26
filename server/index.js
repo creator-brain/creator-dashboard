@@ -90,7 +90,8 @@ async function instagramDeal(req, res, next) {
 
 app.get('/api/meta/deals/:id', requireInstagramSession, instagramDeal, async (_req, res) => {
   const { instagram, conversationId } = res.locals
-  res.json({ conversation: conversationId ? await instagramConversation(instagram, conversationId) : null })
+  if (!conversationId) return res.json({ conversation: null, contactHandle: res.locals.contactHandle })
+  res.json({ conversation: await instagramConversation(instagram, conversationId) })
 })
 
 app.post('/api/meta/deals/:id/link', sameSiteWrite, requireInstagramSession, instagramDeal, async (req, res) => {

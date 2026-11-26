@@ -7,7 +7,7 @@ import {
   InstagramPanel,
   syncInstagramLinks,
 } from "./Instagram.jsx";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import {
@@ -1646,6 +1646,11 @@ function DealDrawer({
 
 export default function App() {
   const [deals, setDeals] = useState([]);
+  const updateLinkedDeal = useCallback((linked) => {
+    setDeals((items) => items.map((item) => item.id === linked.id
+      ? { ...linked, live: isLive(linked), source: sourceOf(linked) }
+      : item));
+  }, []);
   const [load, setLoad] = useState({ state: "loading", message: "", at: null });
   const [view, setView] = useState(initialView);
   const [query, setQuery] = useState("");
@@ -2506,19 +2511,7 @@ export default function App() {
           onClose={() => setDrawer(null)}
           onSave={save}
           onInstagramUnlocked={refresh}
-          onLinked={(linked) =>
-            setDeals((items) =>
-              items.map((item) =>
-                item.id === linked.id
-                  ? {
-                      ...linked,
-                      live: isLive(linked),
-                      source: sourceOf(linked),
-                    }
-                  : item,
-              ),
-            )
-          }
+          onLinked={updateLinkedDeal}
         />
       )}
       {drawer === "integrations" && (

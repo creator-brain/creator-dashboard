@@ -70,18 +70,34 @@ const messageDate = date => date && Number.isFinite(Date.parse(date)) ? new Date
 const matchingConversations = (conversations, handle) => conversations.filter(item => normalizeInstagramHandle(item.username) === handle)
 const mergeConversations = (existing, incoming) => [...new Map([...existing, ...incoming].map(item => [item.id, item])).values()]
 const conversationPage = (after, signal) => api(`/meta/conversations${after ? `?${new URLSearchParams({ after })}` : ''}`, { signal })
+const pauseInbox = () => new Promise(resolve => setTimeout(resolve, 600))
+
+async function findInboxMatches(handle, page, { signal, maxPages = Infinity, onPage }) {
+  const seen = new Set()
+  let matches = matchingConversations(page.conversations, handle)
+  for (let count = 0; !matches.length && page.after !== null && count < maxPages; count++) {
+    if (seen.has(page.after)) throw new Error('Instagram returned a repeated inbox page. Try again.')
+    seen.add(page.after)
+    if (count || page.after) await pauseInbox()
+    signal.throwIfAborted()
+    const result = await conversationPage(page.after, signal)
+    page = { after: result.after || null, conversations: mergeConversations(page.conversations, result.conversations) }
+    onPage?.(page)
+    matches = matchingConversations(page.conversations, handle)
+  }
+  return matches
+}
 
 export async function syncInstagramLinks(onLinked) {
   const { pending } = await api('/meta/pending-links')
   if (!pending.length) return
   const handles = new Map(pending.map(({ handle }) => [handle, new Set()]))
   const seenCursors = new Set()
-  const pause = () => new Promise(resolve => setTimeout(resolve, 600))
   let after = ''
   do {
     if (seenCursors.has(after)) throw new Error('Instagram returned a repeated inbox page. Refresh to try again.')
     seenCursors.add(after)
-    if (after) await pause()
+    if (after) await pauseInbox()
     const page = await conversationPage(after)
     for (const { id, username } of page.conversations) handles.get(normalizeInstagramHandle(username))?.add(id)
     after = page.after
@@ -92,7 +108,7 @@ export async function syncInstagramLinks(onLinked) {
     const matches = handles.get(handle)
     if (matches.size !== 1) continue
     const [conversationId] = matches
-    await pause()
+    await pauseInbox()
     try {
       const { deal } = await api(`/meta/deals/${id}/auto-link`, { method: 'POST', body: JSON.stringify({ conversationId }) })
       if (deal?.instagramLinked) onLinked(deal)
@@ -111,16 +127,50 @@ export function InstagramPanel({ deal, onLinked, onUnlocked }) {
   const searchRequest = useRef(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
+  const [lookupNotice, setLookupNotice] = useState('')
   const path = `/meta/deals/${deal.id}`
   useEffect(() => () => searchRequest.current?.abort(), [])
   useEffect(() => {
     if (!status?.connected) return
     const controller = new AbortController()
-    api(path, { signal: controller.signal }).then(result => setConversation(result.conversation)).catch(reason => {
+    const { signal } = controller
+    setError('')
+    setLookupNotice('')
+    async function load() {
+      const result = await api(path, { signal })
+      if (result.conversation || !result.contactHandle) {
+        if (!signal.aborted) setConversation(result.conversation)
+        return
+      }
+      setHandle(result.contactHandle)
+      setLookupNotice(`Looking for @${result.contactHandle}…`)
+      try {
+        const matches = await findInboxMatches(result.contactHandle, { after: '', conversations: [] }, { signal })
+        if (matches.length === 1) {
+          const { deal: linked } = await api(`${path}/auto-link`, {
+            signal, method: 'POST', body: JSON.stringify({ conversationId: matches[0].id }),
+          })
+          const saved = await api(path, { signal })
+          if (!signal.aborted) {
+            setConversation(saved.conversation)
+            setLookupNotice('')
+            if (linked?.instagramLinked) onLinked(linked)
+          }
+          return
+        }
+        if (!signal.aborted) {
+          setLookupNotice(matches.length ? 'More than one conversation matched. Choose the correct one below.' : `No conversation found for @${result.contactHandle}.`)
+          setConversation(null)
+        }
+      } catch (reason) {
+        if (!signal.aborted) { setLookupNotice(''); setError(reason.message); setConversation(null) }
+      }
+    }
+    load().catch(reason => {
       if (!controller.signal.aborted) setError(reason.message)
     })
     return () => controller.abort()
-  }, [path, status?.connected, deal.instagramLinked])
+  }, [path, status?.connected, deal.instagramLinked, onLinked])
 
   async function run(action) {
     setBusy(true)
@@ -132,7 +182,7 @@ export function InstagramPanel({ deal, onLinked, onUnlocked }) {
   function loadChoices(after) {
     return run(async () => {
       const result = await conversationPage(after)
-      setChoices(previous => ({ ...result, conversations: mergeConversations(after ? previous.conversations : [], result.conversations) }))
+      setChoices(previous => ({ ...result, after: result.after || null, conversations: mergeConversations(after ? previous.conversations : [], result.conversations) }))
     })
   }
   function searchByHandle(event) {
@@ -147,19 +197,8 @@ export function InstagramPanel({ deal, onLinked, onUnlocked }) {
     return run(async () => {
       const controller = new AbortController()
       searchRequest.current = controller
-      let page = choices
-      let matches = matchingConversations(page.conversations, username)
-      // Search a few pages at a time so a large inbox doesn't keep the picker busy indefinitely.
-      for (let count = 0; !matches.length && page.after && count < 5; count++) {
-        if (count) await new Promise(resolve => setTimeout(resolve, 600))
-        if (controller.signal.aborted) return
-        const result = await conversationPage(page.after, controller.signal)
-        page = { ...result, after: result.after === page.after ? '' : result.after,
-          conversations: mergeConversations(page.conversations, result.conversations) }
-        setChoices(page)
-        matches = matchingConversations(page.conversations, username)
-      }
-      if (matches.length === 1) setSelected(matches[0].id)
+      const matches = await findInboxMatches(username, choices, { signal: controller.signal, maxPages: 5, onPage: setChoices })
+      if (!controller.signal.aborted && matches.length === 1) setSelected(matches[0].id)
     })
   }
   function clearSearch() {
@@ -173,6 +212,7 @@ export function InstagramPanel({ deal, onLinked, onUnlocked }) {
     return run(async () => {
       const result = await api(`${path}/link`, { method: 'POST', body: JSON.stringify({ conversationId: selected }) })
       setConversation(result.conversation)
+      setLookupNotice('')
       setChoices(null)
       clearSearch()
       onLinked(result.deal)
@@ -185,6 +225,7 @@ export function InstagramPanel({ deal, onLinked, onUnlocked }) {
   return <section className="space-y-3">
     <h3 className="section-title">Instagram conversation</h3>
     {(error || statusError) && <p className="text-sm text-error" role="alert">{error || statusError}</p>}
+    {lookupNotice && <p className="text-sm text-base-content/65" role="status">{lookupNotice}</p>}
     {status && !status.configured && <p className="text-sm text-base-content/60">Instagram server setup is needed.</p>}
     {status?.configured && !status.connected && <UnlockInstagram onUnlock={next => { setStatus(next); onUnlocked() }} />}
     {status?.connected && conversation === undefined && (error
