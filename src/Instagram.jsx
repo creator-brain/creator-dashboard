@@ -312,7 +312,12 @@ export function InstagramPanel({ deal, onLinked, onUnlocked }) {
           </button>
         </div>
         {sendNotice && <p className="text-sm text-base-content/80" role="status">{sendNotice}</p>}
-        {sendError && <p className="text-sm text-error" role="alert">{sendError}</p>}
+        {sendError && <div className="space-y-1">
+          <p className="text-sm text-error" role="alert">{sendError}</p>
+          <a href={inboxUrl} target="_blank" rel="noopener noreferrer" className="link link-primary inline-flex items-center gap-1 text-sm">
+            Open conversation in Instagram <ExternalLink size={13} />
+          </a>
+        </div>}
       </form>}
     </>}
   </section>

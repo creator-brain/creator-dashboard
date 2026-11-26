@@ -24,6 +24,13 @@ function signature(payload) {
     .digest('base64url')
 }
 
+function metaErrorReference(error) {
+  const codes = [error?.code, error?.error_subcode].filter(Number.isInteger).join('/')
+  const trace = typeof error?.fbtrace_id === 'string' && /^[\w-]{4,96}$/.test(error.fbtrace_id) ? error.fbtrace_id : ''
+  const details = [codes && `Meta error ${codes}`, trace && `reference ${trace}`].filter(Boolean)
+  return details.length ? ` (${details.join(', ')})` : ''
+}
+
 async function graphRequest(path, params, token, payload) {
   const url = `${graph}${path}?${new URLSearchParams(params)}`
   const unknownDelivery = 'Instagram didn’t confirm delivery. Refresh the conversation before trying again.'
@@ -35,11 +42,15 @@ async function graphRequest(path, params, token, payload) {
   const data = await response.json().catch(() => null)
   if (data?.error?.code === 190 && token) throw failure('The Meta access token expired or was revoked. Update it on the server.', 401)
   if (payload) {
+    const reference = metaErrorReference(data?.error)
     if (data?.error?.error_subcode === 2534022 || /outside.*(?:window|allowed time)/i.test(data?.error?.message || '')) {
-      throw failure('Instagram’s reply window has closed. Open this conversation in Instagram to reply.', 409)
+      throw Object.assign(failure(`Meta rejected this reply as outside its allowed window${reference}.`, 409), { instagramWindowRejected: true })
+    }
+    if (data?.error?.error_subcode === 2534037) {
+      throw failure(`Meta says this app does not control the conversation${reference}. Reply in Instagram or check Conversation Routing in Meta Business Suite.`, 409)
     }
     if (response.status >= 500 || !data || (response.ok && !data.error && !data.message_id)) throw failure(unknownDelivery, 502)
-    if (!response.ok || data.error) throw failure('Instagram rejected the reply. Check messaging access or try replying in Instagram.', 502)
+    if (!response.ok || data.error) throw failure(`Instagram rejected the reply${reference}. Check messaging access or try replying in Instagram.`, 502)
   }
   if (!response.ok || !data || data.error) throw failure('Meta could not complete the Instagram request. Check the account and messaging permissions.', 502)
   return data
@@ -119,6 +130,28 @@ export async function sendInstagramReply(session, conversationId, value) {
   const thread = await loadConversation(session, conversationId, false)
   const recipient = replyParticipant(thread, accountId)
   if (!recipient) throw failure('This Instagram conversation does not have a single reply recipient.', 409)
-  const sent = await graphRequest(`/${accountId}/messages`, {}, session.token, { recipient: { id: recipient.id }, message: { text } })
+  let sent
+  try {
+    sent = await graphRequest(`/${accountId}/messages`, {}, session.token, { recipient: { id: recipient.id }, message: { text } })
+  } catch (error) {
+    if (!error.instagramWindowRejected) throw error
+    let lastInbound = NaN
+    try {
+      const latest = await loadConversation(session, conversationId, true)
+      const dates = (latest.messages?.data || [])
+        .filter(message => message.from?.id === recipient.id)
+        .map(message => Date.parse(message.created_time))
+        .filter(Number.isFinite)
+      if (dates.length) lastInbound = Math.max(...dates)
+    } catch { /* Keep the original send rejection if Meta cannot read the thread. */ }
+    if (Number.isFinite(lastInbound)) {
+      const when = new Date(lastInbound).toLocaleString('en-SG', {
+        timeZone: 'Asia/Singapore', dateStyle: 'medium', timeStyle: 'short',
+      })
+      const withinDay = Date.now() - lastInbound >= 0 && Date.now() - lastInbound < 864e5
+      error.message += ` The latest incoming DM shown by Meta was ${when} SGT${withinDay ? ', within the last 24 hours' : ''}.`
+    }
+    throw error
+  }
   return { id: sent.message_id, date: new Date().toISOString(), outgoing: true, text }
 }

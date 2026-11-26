@@ -38,7 +38,7 @@ test('Instagram inbox unlock gates reads and saves the selected inbox conversati
         assert.equal(options.method, 'POST')
         const payload = JSON.parse(options.body)
         sentReplies.push(payload)
-        if (payload.message.text === 'Late reply') return Response.json({ error: { code: 10, error_subcode: 2534022 } }, { status: 400 })
+        if (payload.message.text === 'Late reply') return Response.json({ error: { code: 10, error_subcode: 2534022, fbtrace_id: 'sample-trace' } }, { status: 400 })
         return Response.json({ message_id: 'sent-message' })
       }
       if (path.endsWith('/12345/conversations')) {
@@ -120,9 +120,10 @@ test('Instagram inbox unlock gates reads and saves the selected inbox conversati
   assert.equal(payload.message.id, 'sent-message')
   assert.equal(payload.message.outgoing, true)
   assert.deepEqual(sentReplies, [{ recipient: { id: '67890' }, message: { text: 'Thanks for the brief!' } }])
+  thread.messages.data.find(message => message.id === 'new').created_time = new Date(Date.now() - 14 * 3600_000).toISOString()
   const late = await reply('Late reply')
   assert.equal(late.status, 409)
-  assert.match((await late.json()).error, /reply window has closed/)
+  assert.match((await late.json()).error, /Meta error 10\/2534022, reference sample-trace.*latest incoming DM.*within the last 24 hours/)
   for (let i = 0; i < 10; i++) thread.messages.data.push({ id: 'extra-' + i, created_time: '2026-11-20T10:00:00Z' })
   const recent = await (await request('/deals/' + pageId, { headers })).json()
   assert.equal(recent.conversation.messages.length, 10)
