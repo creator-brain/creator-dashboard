@@ -7,7 +7,7 @@ import {
   InstagramPanel,
   syncInstagramLinks,
 } from "./Instagram.jsx";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import {
@@ -22,6 +22,7 @@ import {
   ExternalLink,
   Inbox,
   LayoutDashboard,
+  LayoutGrid,
   Mail,
   Menu,
   Paperclip,
@@ -66,6 +67,8 @@ import {
 } from "./model.js";
 import { EMAIL_TEMPLATES, hasTemplateFields } from "./emailTemplates.js";
 import { getMediaKit, removeMediaKit, saveMediaKit } from "./mediaKit.js";
+
+const InstagramOverview = lazy(() => import("./InstagramOverview.jsx"));
 
 const savedView = (() => {
   try {
@@ -1256,7 +1259,7 @@ function GmailPanel({ deal, onLinked }) {
   );
 }
 
-function IntegrationsDrawer({ onClose, onInstagramUnlocked }) {
+function IntegrationsDrawer({ onClose, onInstagramUnlocked, onInstagramLocked }) {
   const [gmail, setGmail] = useState(null);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
@@ -1354,7 +1357,7 @@ function IntegrationsDrawer({ onClose, onInstagramUnlocked }) {
             }
             error={error}
           />
-          <InstagramIntegration onUnlocked={onInstagramUnlocked} />
+          <InstagramIntegration onUnlocked={onInstagramUnlocked} onLocked={onInstagramLocked} />
         </div>
       </aside>
     </>
@@ -1653,6 +1656,8 @@ export default function App() {
   }, []);
   const [load, setLoad] = useState({ state: "loading", message: "", at: null });
   const [view, setView] = useState(initialView);
+  const [overview, setOverview] = useState(() => window.location.hash === "#overview");
+  const [boardExpanded, setBoardExpanded] = useState(true);
   const [query, setQuery] = useState("");
   const [filters, setFilters] = useState({
     type: [],
@@ -1661,6 +1666,7 @@ export default function App() {
     kpi: "",
   });
   const [drawer, setDrawer] = useState(null);
+  const [instagramAccessRevision, setInstagramAccessRevision] = useState(0);
   const [body, setBody] = useState(null);
   const [bodyError, setBodyError] = useState("");
   const [log, setLog] = useState([]);
@@ -1671,6 +1677,28 @@ export default function App() {
   const queue = useRef(Promise.resolve());
   const refreshing = useRef(null);
   const instagramSync = useRef(null);
+
+  useEffect(() => {
+    function updatePage() {
+      setOverview(window.location.hash === "#overview");
+      setQuery("");
+    }
+    window.addEventListener("popstate", updatePage);
+    window.addEventListener("hashchange", updatePage);
+    return () => {
+      window.removeEventListener("popstate", updatePage);
+      window.removeEventListener("hashchange", updatePage);
+    };
+  }, []);
+
+  function refreshInstagramAccess() {
+    setInstagramAccessRevision((revision) => revision + 1);
+  }
+
+  function instagramUnlocked() {
+    refreshInstagramAccess();
+    refresh();
+  }
 
   useEffect(() => {
     try {
@@ -1883,6 +1911,7 @@ export default function App() {
     () => deals.filter((d) => (view.board === "live" ? d.live : !d.live)),
     [deals, view.board],
   );
+  const boardCount = scoped.filter((deal) => !CLOSED.has(deal.status)).length;
   const searchActive = Boolean(query.trim());
   const searchResults = useMemo(
     () => searchDeals(deals, query),
@@ -1977,7 +2006,16 @@ export default function App() {
     drawer && drawer !== "log" ? deals.find((d) => d.id === drawer) : null;
   const changeView = (patch) =>
     setView((previous) => ({ ...previous, ...patch }));
+  const navigatePage = (nextOverview) => {
+    if (overview !== nextOverview) {
+      window.history.pushState(null, "", nextOverview ? "#overview" : window.location.pathname + window.location.search);
+      setOverview(nextOverview);
+      window.scrollTo(0, 0);
+    }
+    setQuery("");
+  };
   const chooseStage = (stage) => {
+    navigatePage(false);
     changeView({ stage });
     setFilters((previous) => ({ ...previous, kpi: "" }));
   };
@@ -2018,51 +2056,55 @@ export default function App() {
               <Plug2 size={16} /> Integrations{" "}
               <ChevronRight size={15} className="ml-auto opacity-60" />
             </button>
-            <p className="mb-3 px-3 text-[10px] font-bold uppercase tracking-[.2em] text-primary-content/80">
-              Pipeline
-            </p>
-            <button className="sidebar-link" onClick={() => chooseStage("")}>
-              <LayoutDashboard size={16} /> Deal board
+            <button className="sidebar-link mb-1" aria-current={overview ? "page" : undefined} onClick={() => navigatePage(true)}>
+              <LayoutGrid size={16} /> Overview
             </button>
-            <div className="ml-3 border-l border-white/15 pl-3">
-              <button
-                className={`sidebar-stage ${view.stage === "" ? "active" : ""}`}
-                onClick={() => chooseStage("")}
+            <details className="collapse collapse-arrow" open={!overview && boardExpanded}>
+              <summary
+                className="sidebar-link collapse-title min-h-0"
+                aria-current={!overview ? "page" : undefined}
+                onClick={(event) => {
+                  event.preventDefault();
+                  setBoardExpanded(overview || !boardExpanded);
+                  chooseStage("");
+                }}
               >
-                <span>All collabs</span>
-                <span className="sidebar-count">
-                  {scoped.filter((d) => !CLOSED.has(d.status)).length}
-                </span>
-              </button>
-              {(view.board === "live"
-                ? ["Inbound", "Scheduled", "Wrap-up"]
-                : ["Inbound", "Production", "Wrap-up"]
-              ).map((phase) => (
-                <div key={phase}>
-                  <p className="sidebar-phase">{phase}</p>
-                  {groups
-                    .filter((group) => group.phase === phase)
-                    .map((group) => (
-                      <button
-                        key={group.key}
-                        className={`sidebar-stage ${view.stage === group.key ? "active" : ""}`}
-                        onClick={() => chooseStage(group.key)}
-                      >
-                        <span
-                          className={`tone-dot tone-${group.color}`}
-                          aria-hidden="true"
-                        />
-                        <span className="min-w-0 flex-1">
-                          {group.label || group.key}
-                        </span>
-                        <span className="sidebar-count">
-                          {scoped.filter((d) => inGroup(group, d)).length}
-                        </span>
-                      </button>
-                    ))}
+                <LayoutDashboard size={16} /> Deal board
+                <span className="sidebar-count text-xs" aria-label={`${boardCount} open deals`}>{boardCount}</span>
+              </summary>
+              <div className="collapse-content px-0">
+                <div className="ml-3 border-l border-white/15 pl-3">
+                  {(view.board === "live"
+                    ? ["Inbound", "Scheduled", "Wrap-up"]
+                    : ["Inbound", "Production", "Wrap-up"]
+                  ).map((phase) => (
+                    <div key={phase}>
+                      <p className="sidebar-phase">{phase}</p>
+                      {groups
+                        .filter((group) => group.phase === phase)
+                        .map((group) => (
+                          <button
+                            key={group.key}
+                            className={`sidebar-stage ${!overview && view.stage === group.key ? "active" : ""}`}
+                            onClick={() => chooseStage(group.key)}
+                          >
+                            <span
+                              className={`tone-dot tone-${group.color}`}
+                              aria-hidden="true"
+                            />
+                            <span className="min-w-0 flex-1">
+                              {group.label || group.key}
+                            </span>
+                            <span className="sidebar-count">
+                              {scoped.filter((d) => inGroup(group, d)).length}
+                            </span>
+                          </button>
+                        ))}
+                    </div>
+                  ))}
                 </div>
-              ))}
-            </div>
+              </div>
+            </details>
             <button
               className="sidebar-link mt-5"
               onClick={() => chooseStage("@archive")}
@@ -2123,42 +2165,61 @@ export default function App() {
               <span className="hidden md:inline">Integrations</span>
             </button>
           </header>
+          <nav aria-label="Dashboard pages" className={`flex gap-2 border-b border-base-300 px-4 py-2 md:px-7 ${view.sidebar ? "lg:hidden" : ""}`}>
+            <button className={`btn btn-sm ${overview ? "btn-primary" : "btn-ghost"}`} aria-current={overview ? "page" : undefined} onClick={() => navigatePage(true)}>
+              <LayoutGrid size={15} /> Overview
+            </button>
+            <button className={`btn btn-sm ${!overview ? "btn-primary" : "btn-ghost"}`} aria-current={!overview ? "page" : undefined} onClick={() => chooseStage("")}>
+              <LayoutDashboard size={15} /> Deal board
+              <span className="badge badge-xs" aria-label={`${boardCount} open deals`}>{boardCount}</span>
+            </button>
+          </nav>
           <main className="mx-auto max-w-[1800px] space-y-7 px-4 py-7 md:px-7">
-            <div className="border-l-4 border-secondary pl-4">
-              <h1 className="flex items-center gap-3 font-display text-3xl font-semibold tracking-tight md:text-4xl">
-                <span>Good {greeting} Yandy</span>
-                <img
-                  src={greetingCat}
-                  alt=""
-                  width="96"
-                  height="96"
-                  className="size-16 shrink-0 object-contain sm:size-24"
+            {overview && !searchActive ? (
+              <Suspense fallback={<span className="loading loading-spinner" role="status" aria-label="Loading Overview" />}>
+                <InstagramOverview
+                  key={instagramAccessRevision}
+                  greeting={greeting}
+                  onIntegrations={() => setDrawer("integrations")}
                 />
-              </h1>
-              <ul
-                className="mt-3 list-disc space-y-1 pl-5 text-sm leading-relaxed text-base-content/75"
-                aria-label="What's new"
-              >
-                <li>
-                  <strong>Find a deal.</strong> Press{" "}
-                  <kbd className="kbd kbd-xs">⌘K</kbd>, type a brand, then use ↑
-                  or ↓ and Enter to open a match.
-                </li>
-                <li>
-                  <strong>Filter the board.</strong> Deal type, Platform, and
-                  Source show how many deals match each option.
-                </li>
-                <li>
-                  <strong>Read Instagram DMs.</strong> Unlock the inbox in
-                  Integrations, then open an Instagram deal to see its linked
-                  conversation.
-                </li>
-                <li>
-                  <strong>Spot your replies.</strong> Messages from your
-                  connected Gmail or Instagram account are highlighted in pink.
-                </li>
-              </ul>
-            </div>
+              </Suspense>
+            ) : (
+            <>
+              <div className="border-l-4 border-secondary pl-4">
+                <h1 className="flex items-center gap-3 font-display text-3xl font-semibold tracking-tight md:text-4xl">
+                  <span>Good {greeting} Yandy</span>
+                  <img
+                    src={greetingCat}
+                    alt=""
+                    width="96"
+                    height="96"
+                    className="size-16 shrink-0 object-contain sm:size-24"
+                  />
+                </h1>
+                <ul
+                  className="mt-3 list-disc space-y-1 pl-5 text-sm leading-relaxed text-base-content/75"
+                  aria-label="What's new"
+                >
+                  <li>
+                    <strong>Find a deal.</strong> Press{" "}
+                    <kbd className="kbd kbd-xs">⌘K</kbd>, type a brand, then use ↑
+                    or ↓ and Enter to open a match.
+                  </li>
+                  <li>
+                    <strong>Filter the board.</strong> Deal type, Platform, and
+                    Source show how many deals match each option.
+                  </li>
+                  <li>
+                    <strong>Read Instagram DMs.</strong> Unlock the inbox in
+                    Integrations, then open an Instagram deal to see its linked
+                    conversation.
+                  </li>
+                  <li>
+                    <strong>Spot your replies.</strong> Messages from your
+                    connected Gmail or Instagram account are highlighted in pink.
+                  </li>
+                </ul>
+              </div>
             {load.state === "error" && (
               <div className="alert alert-warning items-start">
                 <CircleAlert size={20} />
@@ -2500,6 +2561,8 @@ export default function App() {
                 />
               </>
             )}
+            </>
+            )}
           </main>
         </div>
       </div>
@@ -2510,13 +2573,14 @@ export default function App() {
           bodyError={bodyError}
           onClose={() => setDrawer(null)}
           onSave={save}
-          onInstagramUnlocked={refresh}
+          onInstagramUnlocked={instagramUnlocked}
           onLinked={updateLinkedDeal}
         />
       )}
       {drawer === "integrations" && (
         <IntegrationsDrawer
-          onInstagramUnlocked={refresh}
+          onInstagramUnlocked={instagramUnlocked}
+          onInstagramLocked={refreshInstagramAccess}
           onClose={() => setDrawer(null)}
         />
       )}

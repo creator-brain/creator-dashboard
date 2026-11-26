@@ -56,6 +56,14 @@ button {
 .sidebar-link:hover {
   background: #ffffff1a;
 }
+.sidebar-link.collapse-title {
+  padding-inline-end: 2.6rem;
+}
+.sidebar-link[aria-current="page"] {
+  background: var(--color-secondary);
+  color: var(--color-secondary-content);
+  font-weight: 700;
+}
 .sidebar-stage {
   display: flex;
   align-items: center;

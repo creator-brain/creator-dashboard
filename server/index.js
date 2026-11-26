@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { DATA_SOURCE_ID, INSTAGRAM_CONVERSATION, instagramConversationId, instagramLinkHandle, notion, pageMarkdown, reconcileFollowUps, toDeal, unlinkedInstagramDeals, updateDeal } from './notion.js'
 import { normalizeInstagramHandle, sourceOf } from '../src/model.js'
-import { instagramConfigured, instagramConversation, instagramConversations, instagramLock, instagramSession, instagramUnlock, sendInstagramReply, validConversationId } from './instagram.js'
+import { instagramAnalytics, instagramConfigured, instagramConversation, instagramConversations, instagramDailyMetric, instagramLock, instagramScorecard, instagramSession, instagramUnlock, sendInstagramReply, validConversationId } from './instagram.js'
 import { gmailAuthorize, gmailCallback, gmailConfigured, gmailConnected, gmailDisconnect, gmailRequest, gmailThreadUrl, makeMessage, replyDetails, summarizeThread, threadIdFromUrl } from './gmail.js'
 import { validWebhookSignature, webhookChallenge } from './metaWebhook.js'
 
@@ -56,12 +56,33 @@ app.get('/api/meta/status', (req, res) => {
 app.post('/api/meta/unlock', sameSiteWrite, instagramUnlock)
 app.post('/api/meta/lock', sameSiteWrite, instagramLock)
 
+app.get('/api/meta/scorecard', async (req, res) => {
+  const session = instagramSession(req)
+  res.json({ scorecard: session ? await instagramScorecard(session) : null })
+})
+
+app.get('/api/meta/analytics', async (req, res) => {
+  const { days = '30' } = req.query
+  if (!['7', '30', '90'].includes(days)) return res.status(400).json({ error: 'Choose 7, 30, or 90 days.' })
+  const configured = instagramConfigured()
+  const session = instagramSession(req)
+  res.json({ configured, analytics: session ? await instagramAnalytics(session, Number(days)) : null })
+})
+
 function requireInstagramSession(req, res, next) {
   const session = instagramSession(req)
   if (!session) return res.status(401).json({ error: 'Unlock the Instagram inbox in Integrations first.' })
   res.locals.instagram = session
   next()
 }
+
+app.get('/api/meta/analytics/daily-:metric', requireInstagramSession, async (req, res) => {
+  const { days = '30' } = req.query
+  const { metric } = req.params
+  if (!['7', '30', '90'].includes(days)) return res.status(400).json({ error: 'Choose 7, 30, or 90 days.' })
+  if (!['views', 'engagement'].includes(metric)) return res.status(400).json({ error: 'Choose views or engagement.' })
+  res.json({ daily: await instagramDailyMetric(res.locals.instagram, Number(days), metric) })
+})
 
 app.get('/api/meta/conversations', requireInstagramSession, async (req, res) => {
   const { after } = req.query

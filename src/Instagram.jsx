@@ -39,7 +39,7 @@ function UnlockInstagram({ onUnlock }) {
   </form>
 }
 
-export function InstagramIntegration({ onUnlocked }) {
+export function InstagramIntegration({ onUnlocked, onLocked }) {
   const { status, setStatus, error, setError } = useInstagramStatus()
   const [busy, setBusy] = useState(false)
   async function disconnect() {
@@ -48,6 +48,7 @@ export function InstagramIntegration({ onUnlocked }) {
     try {
       await api('/meta/lock', { method: 'POST' })
       setStatus(previous => ({ ...previous, connected: false }))
+      onLocked()
     } catch (reason) { setError(reason.message) }
     finally { setBusy(false) }
   }

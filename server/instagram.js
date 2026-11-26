@@ -1,5 +1,6 @@
 import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto'
 import { INSTAGRAM_MESSAGE_LIMIT, INSTAGRAM_REPLY_LIMIT } from '../src/model.js'
+import { contentMetrics, creatorAccount } from '../src/analytics.js'
 
 const graph = 'https://graph.facebook.com/v27.0'
 const sessionCookie = 'cp_meta_inbox'
@@ -52,7 +53,11 @@ async function graphRequest(path, params, token, payload) {
     if (response.status >= 500 || !data || (response.ok && !data.error && !data.message_id)) throw failure(unknownDelivery, 502)
     if (!response.ok || data.error) throw failure(`Instagram rejected the reply${reference}. Check messaging access or try replying in Instagram.`, 502)
   }
-  if (!response.ok || !data || data.error) throw failure('Meta could not complete the Instagram request. Check the account and messaging permissions.', 502)
+  if (!response.ok || !data || data.error) {
+    throw Object.assign(failure('Meta could not complete the Instagram request. Check the account and messaging permissions.', 502), {
+      metaCode: data?.error?.code,
+    })
+  }
   return data
 }
 
@@ -80,6 +85,392 @@ export async function instagramUnlock(req, res) {
 
 export function instagramLock(req, res) {
   res.clearCookie(sessionCookie, cookieOptions(req)).json({ connected: false })
+}
+
+function httpsUrl(value, instagramOnly = false) {
+  try {
+    const url = new URL(value)
+    if (url.protocol !== 'https:' || url.username || url.password) return ''
+    if (instagramOnly && !['instagram.com', 'www.instagram.com'].includes(url.hostname)) return ''
+    return url.href
+  } catch { return '' }
+}
+
+function postPreview(post) {
+  return {
+    id: post.id,
+    type: post.media_type,
+    date: post.timestamp,
+    url: httpsUrl(post.permalink, true),
+    image: httpsUrl(post.media_type === 'VIDEO' ? post.thumbnail_url : post.media_url),
+  }
+}
+
+export async function instagramScorecard(session) {
+  const profile = await graphRequest(`/${session.account.id}`, {
+    fields: 'username,profile_picture_url,followers_count,follows_count,media_count,media.limit(3){id,media_type,media_url,thumbnail_url,permalink,timestamp}',
+  }, session.token)
+  const posts = (profile.media?.data || [])
+    .filter(post => post.id && httpsUrl(post.permalink, true))
+    .sort((a, b) => Date.parse(b.timestamp) - Date.parse(a.timestamp))
+    .slice(0, 3)
+  return {
+    username: profile.username || '',
+    photo: httpsUrl(profile.profile_picture_url),
+    followers: profile.followers_count ?? null,
+    following: profile.follows_count ?? null,
+    postCount: profile.media_count ?? null,
+    posts: posts.map(postPreview),
+  }
+}
+
+const dayMs = 86_400_000
+const sum = values => values.reduce((total, value) => total + value, 0)
+const count = value => Number.isFinite(value) && value >= 0
+const dateKey = time => new Date(time).toISOString().slice(0, 10)
+
+function analyticsRanges(start, end, size) {
+  const ranges = []
+  for (let until = end; until > start;) {
+    const since = Math.max(start, until - size * dayMs)
+    ranges.unshift({ since, until })
+    until = since
+  }
+  return ranges
+}
+
+async function* analyticsMediaPages(session, edge, fields) {
+  const seenCursors = new Set()
+  let after
+  do {
+    const page = await graphRequest(`/${session.account.id}/${edge}`, { fields, limit: '100', ...(after ? { after } : {}) }, session.token)
+    yield page.data || []
+    after = page.paging?.next ? page.paging?.cursors?.after : undefined
+    if (page.paging?.next && (!after || seenCursors.has(after))) throw failure('Meta returned an invalid Instagram media cursor.', 502)
+    if (after) seenCursors.add(after)
+  } while (after)
+}
+
+async function analyticsMedia(session) {
+  const posts = new Map()
+  const fields = 'id,timestamp,like_count,comments_count,caption,media_type,media_product_type,media_url,thumbnail_url,permalink'
+  for await (const page of analyticsMediaPages(session, 'media', fields)) {
+    for (const post of page) {
+      const time = Date.parse(post.timestamp)
+      if (!post.id || !Number.isFinite(time)) continue
+      const likes = count(post.like_count) ? post.like_count : null
+      const comments = count(post.comments_count) ? post.comments_count : null
+      posts.set(post.id, {
+        ...postPreview(post), time, likes, comments, reel: post.media_product_type === 'REELS',
+        caption: post.caption?.trim().slice(0, 140) || '',
+      })
+    }
+  }
+  return [...posts.values()]
+}
+
+async function readInsights(session, id, params) {
+  try {
+    const result = await graphRequest(`/${id}/insights`, params, session.token)
+    return { metrics: new Map((result.data || []).map(row => [row.name, row])) }
+  } catch (error) {
+    if (error.status === 401) throw error
+    return { metrics: new Map(), permissionDenied: error.metaCode === 10 || (error.metaCode >= 200 && error.metaCode < 300) }
+  }
+}
+
+function accountInsightParams(metric, { since, until }, breakdown) {
+  return {
+    metric, period: 'day', metric_type: 'total_value', since: since / 1000, until: until / 1000,
+    ...(breakdown ? { breakdown } : {}),
+  }
+}
+
+function accountInsights(session, metric, range, breakdown) {
+  return readInsights(session, session.account.id, accountInsightParams(metric, range, breakdown))
+}
+
+async function graphInsightsBatch(session, requests) {
+  const batch = requests.map(({ id, params }) => ({
+    method: 'GET',
+    relative_url: `${id}/insights?${new URLSearchParams(params)}`,
+  }))
+  const response = await fetch(graph, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${session.token}` },
+    body: new URLSearchParams({ batch: JSON.stringify(batch), include_headers: 'false' }),
+    redirect: 'error', signal: AbortSignal.timeout(8000),
+  }).catch(() => null)
+  const results = await response?.json().catch(() => null)
+  if (results?.error?.code === 190) throw failure('The Meta access token expired or was revoked. Update it on the server.', 401)
+  if (!response?.ok || !Array.isArray(results)) throw failure('Could not load Instagram Insights. Try again.', 502)
+  return requests.map((_, index) => {
+    const reply = results[index]
+    let body
+    try { body = JSON.parse(reply?.body) } catch { /* Meta may omit incomplete responses. */ }
+    if (body?.error?.code === 190) throw failure('The Meta access token expired or was revoked. Update it on the server.', 401)
+    return new Map((reply?.code === 200 && Array.isArray(body?.data) ? body.data : []).map(row => [row.name, row]))
+  })
+}
+
+const engagementMetrics = ['likes', 'comments', 'shares', 'saves']
+
+async function dailyMetricBatch(session, ranges, metric) {
+  const fields = metric === 'views' ? 'views' : engagementMetrics.join(',')
+  const results = await graphInsightsBatch(session, ranges.map(range => ({
+    id: session.account.id, params: accountInsightParams(fields, range),
+  })))
+  return ranges.map(({ since }, index) => ({
+    date: dateKey(since),
+    [metric]: metric === 'views' ? metricValue(results[index].get('views')) : accountEngagement(results[index]),
+  }))
+}
+
+export async function instagramDailyMetric(session, days, metric) {
+  const until = Math.floor(Date.now() / dayMs) * dayMs
+  const batches = analyticsRanges(until - days * dayMs, until, 30)
+  const results = await Promise.allSettled(batches.map(({ since, until }) =>
+    dailyMetricBatch(session, analyticsRanges(since, until, 1), metric)))
+  const expired = results.find(result => result.status === 'rejected' && result.reason.status === 401)
+  if (expired) throw expired.reason
+  if (results.every(result => result.status === 'rejected')) throw results[0].reason
+  return results.flatMap((result, index) => {
+    if (result.status === 'fulfilled') return result.value
+    const { since, until } = batches[index]
+    return analyticsRanges(since, until, 1).map(day => ({ date: dateKey(day.since), [metric]: null }))
+  })
+}
+
+function metricValue(row) {
+  const value = row?.total_value?.value ?? row?.values?.[0]?.value
+  return count(value) ? value : null
+}
+
+function breakdownValues(row, dimension) {
+  const results = row?.total_value?.breakdowns?.find(item => item.dimension_keys?.[0] === dimension)?.results
+  return (results || []).flatMap(({ dimension_values: [label] = [], value }) =>
+    typeof label === 'string' && count(value) ? [{ label, value }] : [])
+}
+
+function followerChange(total) {
+  const rows = breakdownValues(total, 'follow_type')
+  if (!rows.length && metricValue(total) !== 0) return null
+  let follows = 0, unfollows = 0
+  for (const { label, value } of rows) {
+    if (label === 'FOLLOWER') follows += value
+    else if (label === 'NON_FOLLOWER') unfollows += value
+    else if (value !== 0) return null
+  }
+  return { follows, unfollows, net: follows - unfollows }
+}
+
+async function audienceDemographics(session) {
+  const dimensions = ['age', 'gender', 'country', 'city']
+  const groups = await Promise.all(dimensions.map(async dimension => {
+    const result = await readInsights(session, session.account.id, {
+      metric: 'follower_demographics', period: 'lifetime', metric_type: 'total_value',
+      timeframe: 'this_month', breakdown: dimension,
+    })
+    return breakdownValues(result.metrics.get('follower_demographics'), dimension).sort((a, b) => b.value - a.value)
+  }))
+  return Object.fromEntries(dimensions.map((dimension, index) => [dimension, groups[index]]))
+}
+
+async function mediaInsights(session, id, names, breakdown) {
+  return (await readInsights(session, id, { metric: names, period: 'lifetime', ...(breakdown ? { breakdown } : {}) })).metrics
+}
+
+async function analyticsStories(session, permissionDenied) {
+  const stories = new Map()
+  try {
+    for await (const page of analyticsMediaPages(session, 'stories', 'id,timestamp,media_type,media_url,thumbnail_url,permalink')) {
+      for (const story of page) {
+        if (/^\d+$/.test(story.id) && Number.isFinite(Date.parse(story.timestamp))) stories.set(story.id, postPreview(story))
+      }
+    }
+  } catch (error) {
+    if (error.status === 401) throw error
+    return null
+  }
+  return Promise.all([...stories.values()].sort((a, b) => Date.parse(b.date) - Date.parse(a.date)).map(async story => {
+    if (permissionDenied) return story
+    const [metrics, navigation] = await Promise.all([
+      mediaInsights(session, story.id, 'views,reach,replies,shares'),
+      mediaInsights(session, story.id, 'navigation', 'story_navigation_action_type'),
+    ])
+    const actions = navigation.get('navigation')
+    return {
+      ...story,
+      insights: Object.fromEntries([...metrics, ['navigation', actions]].map(([name, row]) => [name, metricValue(row)])),
+      actions: breakdownValues(actions, 'story_navigation_action_type'),
+    }
+  }))
+}
+
+function engagementTotal(values) {
+  return values.every(count) ? sum(values) : null
+}
+
+function accountEngagement(metrics) {
+  return engagementTotal(engagementMetrics.map(name => metricValue(metrics.get(name))))
+}
+
+async function postEngagement(session, posts, permissionDenied) {
+  const insightsById = new Map()
+  if (!permissionDenied) {
+    const eligible = posts.filter(post => /^\d+$/.test(post.id))
+    for (let offset = 0; offset < eligible.length; offset += 60) {
+      await Promise.all([eligible.slice(offset, offset + 30), eligible.slice(offset + 30, offset + 60)].filter(batch => batch.length).map(async batch => {
+        const metric = 'likes,comments,shares,saved,reach'
+        const results = await graphInsightsBatch(session, batch.map(({ id }) => ({
+          id, params: { metric, period: 'lifetime' },
+        }))).catch(error => {
+          if (error.status === 401) throw error
+          return []
+        })
+        results.forEach((metrics, index) => insightsById.set(batch[index].id, metrics))
+      }))
+    }
+  }
+  return posts.map(post => {
+    const metrics = insightsById.get(post.id)
+    const { likes, comments, shares, saves: saved, reach } = contentMetrics({
+      likes: metricValue(metrics?.get('likes')) ?? post.likes,
+      comments: metricValue(metrics?.get('comments')) ?? post.comments,
+      shares: metricValue(metrics?.get('shares')),
+      saves: metricValue(metrics?.get('saved')),
+      reach: metricValue(metrics?.get('reach')),
+    })
+    const engagements = engagementTotal([likes, comments, shares, saved])
+    const engagementRate = engagements !== null && reach > 0 ? engagements / reach * 100 : null
+    return { ...post, likes, comments, shares, saved, reach, engagements, engagementRate }
+  })
+}
+
+async function analyticsPosts(session, media, permissionDenied) {
+  const measured = await postEngagement(session, media, permissionDenied)
+  const top = measured.filter(post => post.engagements !== null)
+    .sort((a, b) => b.engagements - a.engagements || b.time - a.time)
+    .slice(0, 15)
+  const recent = [...measured].sort((a, b) => b.time - a.time).slice(0, 15)
+  const selected = new Map([...top, ...recent].map(post => [post.id, post]))
+  const details = await Promise.all([...selected.values()].map(async ({ time, ...post }) => {
+    if (permissionDenied || !/^\d+$/.test(post.id)) return post
+    const [common, watch] = await Promise.all([
+      mediaInsights(session, post.id, 'views,reposts,total_interactions'),
+      post.reel ? mediaInsights(session, post.id, 'ig_reels_avg_watch_time,ig_reels_video_view_total_time,reels_skip_rate') : null,
+    ])
+    return { ...post, insights: Object.fromEntries([...common, ...(watch || [])].map(([name, row]) => [name, metricValue(row)])) }
+  }))
+  const byId = new Map(details.map(post => [post.id, post]))
+  return {
+    top: top.map(post => byId.get(post.id)),
+    recent: recent.map(post => byId.get(post.id)),
+    measured,
+  }
+}
+
+const reachWeekdays = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
+const reachPublishingTime = new Intl.DateTimeFormat('en-GB', {
+  timeZone: 'Asia/Singapore', weekday: 'short', hour: 'numeric', hourCycle: 'h23',
+})
+
+function reachByPublishingTime(posts) {
+  const weekdays = reachWeekdays.map(label => ({ label, reach: 0, posts: 0 }))
+  const windows = Array.from({ length: 6 }, (_, index) => ({
+    startHour: index * 4, endHour: (index + 1) * 4, reach: 0, posts: 0,
+  }))
+  for (const { time, reach } of posts) {
+    const parts = reachPublishingTime.formatToParts(time)
+    const weekday = parts.find(({ type }) => type === 'weekday').value
+    const hour = Number(parts.find(({ type }) => type === 'hour').value)
+    const dayBucket = weekdays[reachWeekdays.indexOf(weekday)]
+    const timeBucket = windows[Math.floor(hour / 4)]
+    dayBucket.reach += reach
+    dayBucket.posts += 1
+    timeBucket.reach += reach
+    timeBucket.posts += 1
+  }
+  return { weekdays, windows }
+}
+
+export async function instagramAnalytics(session, days) {
+  const until = Math.floor(Date.now() / dayMs) * dayMs
+  const since = until - days * dayMs
+  const uniqueAccountDays = Math.min(days, 30)
+  const weeks = analyticsRanges(since, until, 7)
+  const viewsFor = range => accountInsights(session, `views,total_interactions,reach,accounts_engaged,profile_links_taps,${engagementMetrics.join(',')}`, range)
+  const growthFor = range => accountInsights(session, 'follows_and_unfollows', range, 'follow_type')
+  const [profile, media, latestViews, latestGrowth] = await Promise.all([
+    graphRequest(`/${session.account.id}`, { fields: 'username,followers_count,follows_count,media_count' }, session.token),
+    analyticsMedia(session),
+    viewsFor(weeks.at(-1)),
+    growthFor(weeks.at(-1)),
+  ])
+  const denied = latestViews.permissionDenied && latestGrowth.permissionDenied
+  const empty = { metrics: new Map() }
+  const earlierWeeks = weeks.slice(0, -1)
+  const [earlierViews, earlierGrowth, monthlyGrowth, postPerformance, period, demographics, stories] = await Promise.all([
+    latestViews.permissionDenied ? earlierWeeks.map(() => empty) : Promise.all(earlierWeeks.map(viewsFor)),
+    latestGrowth.permissionDenied ? earlierWeeks.map(() => empty) : Promise.all(earlierWeeks.map(growthFor)),
+    latestGrowth.permissionDenied ? empty : growthFor({ since: until - 30 * dayMs, until }),
+    analyticsPosts(session, media, denied),
+    denied ? empty : weeks.length === 1 ? latestViews : accountInsights(session, 'reach,accounts_engaged', {
+      since: until - uniqueAccountDays * dayMs, until,
+    }),
+    denied ? {} : audienceDemographics(session),
+    analyticsStories(session, denied),
+  ])
+  const { measured: measuredMedia, ...featuredPosts } = postPerformance
+  const postsWithReach = measuredMedia.filter(post => post.reach !== null)
+  const posts = measuredMedia.filter(({ time }) => time >= since && time < until)
+  const viewResults = [...earlierViews, latestViews]
+  const growthResults = [...earlierGrowth, latestGrowth]
+  const weekly = weeks.map(({ since: start, until: end }, index) => {
+    const { metrics } = viewResults[index]
+    const growth = followerChange(growthResults[index].metrics.get('follows_and_unfollows'))
+    return {
+      start: dateKey(start), end: dateKey(end - dayMs),
+      views: metricValue(metrics.get('views')),
+      interactions: metricValue(metrics.get('total_interactions')),
+      engagement: accountEngagement(metrics),
+      reach: metricValue(metrics.get('reach')),
+      accountsEngaged: metricValue(metrics.get('accounts_engaged')),
+      profileLinkTaps: metricValue(metrics.get('profile_links_taps')),
+      follows: growth?.follows ?? null, unfollows: growth?.unfollows ?? null, netFollowers: growth?.net ?? null,
+      posts: posts.filter(({ time }) => time >= start && time < end).length,
+    }
+  })
+  const weeklyTotal = key => weekly.every(week => week[key] !== null) ? sum(weekly.map(week => week[key])) : null
+  const followers = count(profile.followers_count) ? profile.followers_count : null
+  const measured = posts.filter(post => post.engagementRate !== null)
+  return {
+    account: creatorAccount('instagram', { username: profile.username, followers, following: profile.follows_count, posts: profile.media_count }),
+    username: profile.username || '',
+    followers,
+    following: count(profile.follows_count) ? profile.follows_count : null,
+    start: dateKey(since),
+    end: dateKey(until - dayMs),
+    views: weeklyTotal('views'),
+    engagement: measured.length ? sum(measured.map(post => post.engagementRate)) / measured.length : null,
+    measuredPosts: measured.length,
+    netFollowers: weeklyTotal('netFollowers'),
+    followerChange30Days: followerChange(monthlyGrowth.metrics.get('follows_and_unfollows'))?.net ?? null,
+    accountMetrics: {
+      uniqueAccountDays,
+      reach: metricValue(period.metrics.get('reach')),
+      accountsEngaged: metricValue(period.metrics.get('accounts_engaged')),
+      profileLinkTaps: weeklyTotal('profileLinkTaps'),
+      interactions: weeklyTotal('interactions'), follows: weeklyTotal('follows'), unfollows: weeklyTotal('unfollows'),
+    },
+    demographics,
+    stories,
+    postCount: posts.length,
+    featuredPosts,
+    reachByPublishingTime: reachByPublishingTime(postsWithReach),
+    insightsPermissionDenied: [...viewResults, ...growthResults].some(result => result.permissionDenied),
+    weekly,
+  }
 }
 
 const counterpart = (conversation, accountId) => conversation.participants?.data?.find(person => person.id !== accountId)?.username || ''
