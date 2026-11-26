@@ -28,11 +28,19 @@ test('Instagram inbox unlock gates reads and saves the selected inbox conversati
     NOTION_TOKEN: 'notion-token',
   })
   const liveFetch = globalThis.fetch
+  const sentReplies = []
   const stub = t.mock.method(globalThis, 'fetch', async (input, options) => {
     const url = new URL(input)
     if (url.hostname === 'graph.facebook.com') {
       const path = url.pathname
       assert.equal(options.headers.Authorization, 'Bearer meta-token')
+      if (path.endsWith('/12345/messages')) {
+        assert.equal(options.method, 'POST')
+        const payload = JSON.parse(options.body)
+        sentReplies.push(payload)
+        if (payload.message.text === 'Late reply') return Response.json({ error: { code: 10, error_subcode: 2534022 } }, { status: 400 })
+        return Response.json({ message_id: 'sent-message' })
+      }
       if (path.endsWith('/12345/conversations')) {
         const after = url.searchParams.get('after')
         return Response.json({ data: [thread], paging: after ? {} : { next: 'next', cursors: { after: 'cursor' } } })
@@ -100,6 +108,25 @@ test('Instagram inbox unlock gates reads and saves the selected inbox conversati
   assert.equal(page.properties[instagramField].rich_text[0].text.content, conversationId)
   const { conversation } = await (await request('/deals/' + pageId, { headers })).json()
   assert.deepEqual(conversation.messages.map(message => message.id), ['new', 'old'])
+  const reply = (text, id = conversationId) => request('/deals/' + pageId + '/send', {
+    headers, method: 'POST', body: JSON.stringify({ conversationId: id, text, recipient: 'ignored' }),
+  })
+  assert.equal((await reply('Wrong conversation', 'other-thread')).status, 409)
+  assert.equal((await reply(' ')).status, 400)
+  assert.deepEqual(sentReplies, [])
+  const send = await reply('Thanks for the brief!')
+  assert.equal(send.status, 200)
+  const payload = await send.json()
+  assert.equal(payload.message.id, 'sent-message')
+  assert.equal(payload.message.outgoing, true)
+  assert.deepEqual(sentReplies, [{ recipient: { id: '67890' }, message: { text: 'Thanks for the brief!' } }])
+  const late = await reply('Late reply')
+  assert.equal(late.status, 409)
+  assert.match((await late.json()).error, /reply window has closed/)
+  for (let i = 0; i < 10; i++) thread.messages.data.push({ id: 'extra-' + i, created_time: '2026-11-20T10:00:00Z' })
+  const recent = await (await request('/deals/' + pageId, { headers })).json()
+  assert.equal(recent.conversation.messages.length, 10)
+  assert.equal(recent.conversation.messages[0].id, 'new')
   const locked = await request('/lock', { method: 'POST', headers })
   assert.equal(locked.status, 200)
   assert.match(locked.headers.get('set-cookie'), /^cp_meta_inbox=;/)

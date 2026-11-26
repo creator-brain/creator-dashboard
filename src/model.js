@@ -35,6 +35,8 @@ export const inGroup = (group, deal) => (group.statuses || [group.key]).includes
 export const isLive = deal => deal.type.includes('Livestream') || deal.platforms.includes('Live') || /\blive\b|livestream|\bstreams?\b/i.test(`${deal.brand} ${deal.agency}`)
 export const sourceOf = deal => deal.gmail ? 'Email' : /whatsapp/i.test(deal.agency) ? 'WhatsApp' : /instagram/i.test(deal.agency) ? 'Instagram' : 'Unknown'
 export const normalizeInstagramHandle = value => value.trim().replace(/^@/, '').toLowerCase()
+export const INSTAGRAM_REPLY_LIMIT = 1000
+export const INSTAGRAM_MESSAGE_LIMIT = 10
 export const datePart = value => value?.slice(0, 10) || ''
 export const today = () => new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Singapore' })
 export const dayDiff = value => Math.round((new Date(`${datePart(value)}T00:00:00+08:00`) - new Date(`${today()}T00:00:00+08:00`)) / 864e5)

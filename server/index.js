@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { DATA_SOURCE_ID, INSTAGRAM_CONVERSATION, instagramConversationId, instagramLinkHandle, notion, pageMarkdown, reconcileFollowUps, toDeal, unlinkedInstagramDeals, updateDeal } from './notion.js'
 import { normalizeInstagramHandle, sourceOf } from '../src/model.js'
-import { instagramConfigured, instagramConversation, instagramConversations, instagramLock, instagramSession, instagramUnlock, validConversationId } from './instagram.js'
+import { instagramConfigured, instagramConversation, instagramConversations, instagramLock, instagramSession, instagramUnlock, sendInstagramReply, validConversationId } from './instagram.js'
 import { gmailAuthorize, gmailCallback, gmailConfigured, gmailConnected, gmailDisconnect, gmailRequest, gmailThreadUrl, makeMessage, replyDetails, summarizeThread, threadIdFromUrl } from './gmail.js'
 import { validWebhookSignature, webhookChallenge } from './metaWebhook.js'
 
@@ -92,6 +92,22 @@ app.get('/api/meta/deals/:id', requireInstagramSession, instagramDeal, async (_r
   const { instagram, conversationId } = res.locals
   if (!conversationId) return res.json({ conversation: null, contactHandle: res.locals.contactHandle })
   res.json({ conversation: await instagramConversation(instagram, conversationId) })
+})
+
+app.post('/api/meta/deals/:id/send', sameSiteWrite, requireInstagramSession, instagramDeal, async (req, res) => {
+  const { instagram, conversationId, deal: currentDeal } = res.locals
+  if (!conversationId || req.body?.conversationId !== conversationId) {
+    return res.status(409).json({ error: 'The linked Instagram conversation changed. Refresh the deal before sending.' })
+  }
+  const message = await sendInstagramReply(instagram, conversationId, req.body?.text)
+  const activityDate = instagramActivityDate({ updatedAt: message.date })
+  let deal = null
+  let warning = ''
+  if (activityDate > currentDeal.last) {
+    try { deal = await updateDeal(req.params.id, { prop: 'activity', value: activityDate }) }
+    catch { warning = 'Message sent. Last Activity could not be updated in Notion.' }
+  }
+  res.json({ message, deal, warning })
 })
 
 app.post('/api/meta/deals/:id/link', sameSiteWrite, requireInstagramSession, instagramDeal, async (req, res) => {

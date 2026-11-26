@@ -1,4 +1,5 @@
 import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto'
+import { INSTAGRAM_MESSAGE_LIMIT, INSTAGRAM_REPLY_LIMIT } from '../src/model.js'
 
 const graph = 'https://graph.facebook.com/v27.0'
 const sessionCookie = 'cp_meta_inbox'
@@ -23,14 +24,23 @@ function signature(payload) {
     .digest('base64url')
 }
 
-async function graphRequest(path, params, token) {
+async function graphRequest(path, params, token, payload) {
   const url = `${graph}${path}?${new URLSearchParams(params)}`
+  const unknownDelivery = 'Instagram didn’t confirm delivery. Refresh the conversation before trying again.'
   const response = await fetch(url, {
-    headers: token ? { Authorization: `Bearer ${token}` } : {},
+    headers: { Authorization: `Bearer ${token}`, ...(payload ? { 'Content-Type': 'application/json' } : {}) },
+    ...(payload ? { method: 'POST', body: JSON.stringify(payload) } : {}),
     redirect: 'error', signal: AbortSignal.timeout(8000),
-  }).catch(() => { throw failure('Could not reach Instagram. Try again.', 502) })
+  }).catch(() => { throw failure(payload ? unknownDelivery : 'Could not reach Instagram. Try again.', 502) })
   const data = await response.json().catch(() => null)
   if (data?.error?.code === 190 && token) throw failure('The Meta access token expired or was revoked. Update it on the server.', 401)
+  if (payload) {
+    if (data?.error?.error_subcode === 2534022 || /outside.*(?:window|allowed time)/i.test(data?.error?.message || '')) {
+      throw failure('Instagram’s reply window has closed. Open this conversation in Instagram to reply.', 409)
+    }
+    if (response.status >= 500 || !data || (response.ok && !data.error && !data.message_id)) throw failure(unknownDelivery, 502)
+    if (!response.ok || data.error) throw failure('Instagram rejected the reply. Check messaging access or try replying in Instagram.', 502)
+  }
   if (!response.ok || !data || data.error) throw failure('Meta could not complete the Instagram request. Check the account and messaging permissions.', 502)
   return data
 }
@@ -75,19 +85,40 @@ export async function instagramConversations(session, after) {
   }
 }
 
-export async function instagramConversation(session, id, { includeMessages = true } = {}) {
+async function loadConversation(session, id, includeMessages) {
   if (!validConversationId(id)) throw failure('Invalid Instagram conversation ID.', 400)
   const row = await graphRequest(`/${encodeURIComponent(id)}`, {
-    fields: `id,updated_time,participants${includeMessages ? ',messages.limit(20){id,created_time,from,message}' : ''}`,
+    fields: `id,updated_time,participants${includeMessages ? `,messages.limit(${INSTAGRAM_MESSAGE_LIMIT}){id,created_time,from,message}` : ''}`,
   }, session.token)
   if (!row.participants?.data?.some(person => person.id === session.account.id)) {
     throw failure('This Instagram conversation is outside the connected account.', 403)
   }
+  return row
+}
+
+function replyParticipant(row, accountId) {
+  const others = row.participants?.data?.filter(person => person.id !== accountId) || []
+  return others.length === 1 && /^\d+$/.test(others[0].id || '') ? others[0] : null
+}
+
+export async function instagramConversation(session, id, { includeMessages = true } = {}) {
+  const row = await loadConversation(session, id, includeMessages)
   return {
     id: row.id, username: counterpart(row, session.account.id), updatedAt: row.updated_time,
     messages: (row.messages?.data || []).map(message => ({
       id: message.id, date: message.created_time, sender: message.from?.username || '',
       outgoing: message.from?.id === session.account.id, text: message.message || '',
-    })).sort((a, b) => Date.parse(b.date) - Date.parse(a.date)),
+    })).sort((a, b) => Date.parse(b.date) - Date.parse(a.date)).slice(0, INSTAGRAM_MESSAGE_LIMIT),
   }
+}
+
+export async function sendInstagramReply(session, conversationId, value) {
+  const text = typeof value === 'string' ? value.trim() : ''
+  if (!text || text.length > INSTAGRAM_REPLY_LIMIT) throw failure(`Enter a reply of 1 to ${INSTAGRAM_REPLY_LIMIT} characters.`, 400)
+  const accountId = session.account.id
+  const thread = await loadConversation(session, conversationId, false)
+  const recipient = replyParticipant(thread, accountId)
+  if (!recipient) throw failure('This Instagram conversation does not have a single reply recipient.', 409)
+  const sent = await graphRequest(`/${accountId}/messages`, {}, session.token, { recipient: { id: recipient.id }, message: { text } })
+  return { id: sent.message_id, date: new Date().toISOString(), outgoing: true, text }
 }

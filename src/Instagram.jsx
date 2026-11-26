@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
-import { Instagram } from 'lucide-react'
+import { ExternalLink, Instagram, Send } from 'lucide-react'
 import { IntegrationCard } from './IntegrationCard.jsx'
-import { api, normalizeInstagramHandle } from './model.js'
+import { api, INSTAGRAM_MESSAGE_LIMIT, INSTAGRAM_REPLY_LIMIT, normalizeInstagramHandle } from './model.js'
 
 function useInstagramStatus() {
   const [status, setStatus] = useState(null)
@@ -71,6 +71,7 @@ const matchingConversations = (conversations, handle) => conversations.filter(it
 const mergeConversations = (existing, incoming) => [...new Map([...existing, ...incoming].map(item => [item.id, item])).values()]
 const conversationPage = (after, signal) => api(`/meta/conversations${after ? `?${new URLSearchParams({ after })}` : ''}`, { signal })
 const pauseInbox = () => new Promise(resolve => setTimeout(resolve, 600))
+const instagramInboxUrl = username => /^[\w.]{1,30}$/.test(username || '') ? `https://ig.me/m/${encodeURIComponent(username)}` : 'https://www.instagram.com/direct/inbox/'
 
 async function findInboxMatches(handle, page, { signal, maxPages = Infinity, onPage }) {
   const seen = new Set()
@@ -128,7 +129,13 @@ export function InstagramPanel({ deal, onLinked, onUnlocked }) {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [lookupNotice, setLookupNotice] = useState('')
+  const [reply, setReply] = useState('')
+  const [sendNotice, setSendNotice] = useState('')
+  const [sendError, setSendError] = useState('')
+  const [sending, setSending] = useState(false)
   const path = `/meta/deals/${deal.id}`
+  const inboxUrl = instagramInboxUrl(conversation?.username)
+  useEffect(() => { setReply(''); setSendNotice(''); setSendError('') }, [conversation?.id])
   useEffect(() => () => searchRequest.current?.abort(), [])
   useEffect(() => {
     if (!status?.connected) return
@@ -221,6 +228,28 @@ export function InstagramPanel({ deal, onLinked, onUnlocked }) {
   function refresh() {
     return run(async () => setConversation((await api(path)).conversation))
   }
+  async function sendReply(event) {
+    event.preventDefault()
+    const text = reply.trim()
+    if (!conversation || sending || busy || !text || text.length > INSTAGRAM_REPLY_LIMIT) return
+    if (!window.confirm(`Send this Instagram reply${conversation.username ? ` to @${conversation.username}` : ''}?`)) return
+    setSending(true)
+    setSendNotice('')
+    setSendError('')
+    try {
+      const result = await api(`${path}/send`, {
+        method: 'POST', body: JSON.stringify({ conversationId: conversation.id, text }),
+      })
+      setConversation(current => current?.id === conversation.id ? {
+        ...current,
+        messages: [result.message, ...current.messages.filter(message => message.id !== result.message.id)].slice(0, INSTAGRAM_MESSAGE_LIMIT),
+      } : current)
+      setReply('')
+      setSendNotice(result.warning || 'Reply sent on Instagram.')
+      if (result.deal) onLinked(result.deal)
+    } catch (reason) { setSendError(reason.message) }
+    finally { setSending(false) }
+  }
   const visibleChoices = !choices ? [] : searchedHandle ? matchingConversations(choices.conversations, searchedHandle) : choices.conversations
   return <section className="space-y-3">
     <h3 className="section-title">Instagram conversation</h3>
@@ -232,8 +261,8 @@ export function InstagramPanel({ deal, onLinked, onUnlocked }) {
       ? <button className="btn btn-ghost btn-sm" type="button" disabled={busy} onClick={refresh}>Try again</button>
       : <span className="loading loading-spinner loading-sm" aria-label="Loading Instagram conversation" />)}
     {conversation !== undefined && !choices && <div className="flex flex-wrap gap-2">
-      <button className="btn btn-outline btn-sm" type="button" disabled={busy} onClick={() => loadChoices()}>{conversation ? 'Change conversation' : 'Choose conversation'}</button>
-      {conversation && <button className="btn btn-ghost btn-sm" type="button" disabled={busy} onClick={refresh}>Refresh messages</button>}
+      <button className="btn btn-outline btn-sm" type="button" disabled={busy || sending} onClick={() => loadChoices()}>{conversation ? 'Change conversation' : 'Choose conversation'}</button>
+      {conversation && <button className="btn btn-ghost btn-sm" type="button" disabled={busy || sending} onClick={refresh}>Refresh messages</button>}
     </div>}
     {choices && <div className="space-y-3">
       <form className="space-y-2" onSubmit={searchByHandle}>
@@ -261,12 +290,30 @@ export function InstagramPanel({ deal, onLinked, onUnlocked }) {
       </form>
     </div>}
     {conversation && <>
-      {conversation.username && <p className="text-sm font-medium">@{conversation.username}</p>}
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        {conversation.username && <p className="text-sm font-medium">@{conversation.username}</p>}
+        <a href={inboxUrl} target="_blank" rel="noopener noreferrer" className="link link-primary ml-auto inline-flex items-center gap-1 text-xs">Open in Instagram <ExternalLink size={13} /></a>
+      </div>
       {!conversation.messages.length && <p className="text-sm text-base-content/60">No recent messages returned by Instagram.</p>}
       {conversation.messages.map((message, index) => <details key={`${conversation.id}:${message.id}`} open={index === 0} className={`rounded-xl border p-3 ${message.outgoing ? 'message-outgoing' : 'border-base-300'}`}>
         <summary className="cursor-pointer text-sm font-medium">{message.outgoing ? 'You' : message.sender ? `@${message.sender}` : 'Instagram'} <time className="ml-1 text-xs font-normal opacity-65">{messageDate(message.date)}</time></summary>
-        <p className="mt-2 whitespace-pre-wrap break-words text-sm">{message.text || 'No message text. View media or shares in Instagram.'}</p>
+        {message.text ? <p className="mt-2 whitespace-pre-wrap break-words text-sm">{message.text}</p>
+          : <a href={inboxUrl} target="_blank" rel="noopener noreferrer" className="link link-primary mt-2 inline-flex items-center gap-1 text-sm">View media or share in Instagram <ExternalLink size={13} /></a>}
       </details>)}
+      {!choices && <form onSubmit={sendReply} className="space-y-2 rounded-xl border border-base-300 p-3">
+        <label className="block text-sm font-medium">Reply on Instagram
+          <textarea className="textarea textarea-bordered mt-1 min-h-24 w-full" value={reply} maxLength={INSTAGRAM_REPLY_LIMIT}
+            onChange={event => setReply(event.target.value)} placeholder="Write a reply…" disabled={sending} />
+        </label>
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <span className="text-xs text-base-content/65">{reply.length}/{INSTAGRAM_REPLY_LIMIT}</span>
+          <button className="btn btn-primary btn-sm" type="submit" disabled={busy || sending || !reply.trim()}>
+            {sending ? <span className="loading loading-spinner loading-xs" /> : <Send size={14} />} {sending ? 'Sending…' : 'Send reply'}
+          </button>
+        </div>
+        {sendNotice && <p className="text-sm text-base-content/80" role="status">{sendNotice}</p>}
+        {sendError && <p className="text-sm text-error" role="alert">{sendError}</p>}
+      </form>}
     </>}
   </section>
 }
