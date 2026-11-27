@@ -42,8 +42,18 @@ test('Instagram inbox unlock gates reads and saves the selected inbox conversati
   const hour = 3_600_000
   const analyticsEnd = Math.floor(Date.now() / day) * day
   let insightsAllowed = true
+  const cdnFiles = {
+    'https://scontent.cdninstagram.com/image.jpg': Buffer.from([0xff, 0xd8, 0xff, 0xe0, 1, 2, 3]),
+    'https://lookaside.fbsbx.com/file': Buffer.from('%PDF-1.7 brief'),
+  }
+  const cdnRequests = []
   const stub = t.mock.method(globalThis, 'fetch', async (input, options) => {
     const url = new URL(input)
+    if (cdnFiles[url.href]) {
+      cdnRequests.push(url.href)
+      assert.equal(options?.headers?.Authorization, undefined)
+      return new Response(cdnFiles[url.href])
+    }
     if (url.hostname === 'graph.facebook.com') {
       const path = url.pathname
       assert.equal(options.headers.Authorization, 'Bearer meta-token')
@@ -328,6 +338,27 @@ test('Instagram inbox unlock gates reads and saves the selected inbox conversati
     { type: 'image', name: '', preview: false },
     { type: 'share', name: 'A Reel', preview: false },
   ])
+  const media = (messageId, index, options = { headers }) => request(`/deals/${pageId}/messages/${messageId}/media/${index}`, options)
+  assert.equal((await media('new', 0, {})).status, 401)
+  assert.equal((await media('missing', 0)).status, 404)
+  assert.equal((await media('new', 9)).status, 404)
+  assert.equal((await media('new', 'x')).status, 400)
+  const image = await media('new', 0)
+  assert.equal(image.status, 200)
+  assert.equal(image.headers.get('content-type'), 'image/jpeg')
+  assert.match(image.headers.get('content-disposition'), /^inline;/)
+  assert.match(image.headers.get('content-security-policy'), /sandbox/)
+  assert.deepEqual(Buffer.from(await image.arrayBuffer()), cdnFiles['https://scontent.cdninstagram.com/image.jpg'])
+  const brief = await media('new', 2)
+  assert.equal(brief.headers.get('content-type'), 'application/pdf')
+  assert.match(brief.headers.get('content-disposition'), /^inline; filename="Brief\.pdf"/)
+  const external = await media('new', 3)
+  assert.equal(external.status, 302)
+  assert.equal(external.headers.get('location'), 'https://external.example/image.png')
+  const share = await media('new', 4)
+  assert.equal(share.status, 302)
+  assert.equal(share.headers.get('location'), 'https://www.instagram.com/reel/example/')
+  assert.deepEqual(cdnRequests, ['https://scontent.cdninstagram.com/image.jpg', 'https://lookaside.fbsbx.com/file'])
   const reply = (text, id = conversationId) => request('/deals/' + pageId + '/send', {
     headers, method: 'POST', body: JSON.stringify({ conversationId: id, text, recipient: 'ignored' }),
   })

@@ -4,7 +4,7 @@ import { resolve } from 'node:path'
 import { parseEnv } from 'node:util'
 import { DATA_SOURCE_ID, INSTAGRAM_CONVERSATION, instagramConversationId, instagramLinkHandle, notion, pageMarkdown, reconcileFollowUps, toDeal, unlinkedInstagramDeals, updateDeal } from './notion.js'
 import { normalizeInstagramHandle, sourceOf } from '../src/model.js'
-import { instagramAnalytics, instagramConfigured, instagramConversation, instagramConversations, instagramDailyMetric, instagramLock, instagramScorecard, instagramSession, instagramUnlock, sendInstagramReply, validConversationId } from './instagram.js'
+import { instagramAnalytics, instagramConfigured, instagramConversation, instagramConversations, instagramMessageFile, instagramDailyMetric, instagramLock, instagramScorecard, instagramSession, instagramUnlock, sendInstagramReply, validConversationId } from './instagram.js'
 import { gmailAttachmentParts, gmailAuthorize, gmailCallback, gmailConfigured, gmailConnected, gmailDisconnect, gmailPdfParts, gmailRequest, gmailThreadUrl, GMAIL_ATTACHMENT_DOWNLOAD_LIMIT, makeMessage, viewableAttachmentType, replyDetails, summarizeThread, threadIdFromUrl } from './gmail.js'
 import { validWebhookSignature, webhookChallenge } from './metaWebhook.js'
 import { tiktokAnalytics, tiktokAuthorize, tiktokCallback, tiktokDisconnect, tiktokStatus } from './tiktok.js'
@@ -126,6 +126,15 @@ app.get('/api/meta/deals/:id', requireInstagramSession, instagramDeal, async (_r
   res.json({ conversation: await instagramConversation(instagram, conversationId) })
 })
 
+app.get('/api/meta/deals/:id/messages/:messageId/media/:index', requireInstagramSession, instagramDeal, async (req, res) => {
+  const { instagram, conversationId } = res.locals
+  if (!conversationId) return res.status(404).json({ error: 'No linked Instagram conversation.' })
+  const file = await instagramMessageFile(instagram, conversationId, req.params.messageId, req.params.index)
+  res.set('Cache-Control', 'private, no-store')
+  if (file.redirect) return res.redirect(file.redirect)
+  sendViewableFile(res, file.bytes, file.name || 'instagram-attachment')
+})
+
 app.post('/api/meta/deals/:id/send', sameSiteWrite, requireInstagramSession, instagramDeal, async (req, res) => {
   const { instagram, conversationId, deal: currentDeal } = res.locals
   if (!conversationId || req.body?.conversationId !== conversationId) {
@@ -185,6 +194,17 @@ app.get('/api/deals/:id/gmail', async (req, res, next) => {
     res.json({ thread, reply: replyDetails(thread, profile.emailAddress) })
   } catch (error) { next(error) }
 })
+// PDFs and real images (judged by their bytes) open in the browser tab; everything else downloads.
+function sendViewableFile(res, bytes, name, downloadType = 'application/octet-stream') {
+  res.set('X-Content-Type-Options', 'nosniff')
+  const viewable = viewableAttachmentType(bytes)
+  if (!viewable) return res.attachment(name).type(downloadType).send(bytes)
+  const fallback = String(name || 'attachment').replace(/[^\x20-\x7e]|["\\]/g, '_')
+  res.set('Content-Disposition', `inline; filename="${fallback}"; filename*=UTF-8''${encodeURIComponent(name || 'attachment')}`)
+  if (viewable !== 'application/pdf') res.set('Content-Security-Policy', "default-src 'none'; img-src 'self'; style-src 'unsafe-inline'; sandbox")
+  res.type(viewable).send(bytes)
+}
+
 app.get('/api/deals/:id/gmail/messages/:messageId/:kind/:index', async (req, res, next) => {
   const { messageId, kind, index } = req.params
   if (kind !== 'pdfs' && kind !== 'attachments') return next()
@@ -205,16 +225,7 @@ app.get('/api/deals/:id/gmail/messages/:messageId/:kind/:index', async (req, res
   const bytes = Buffer.from(body.data, 'base64url')
   const isPdf = file.mimeType === 'application/pdf'
   if (bytes.length > GMAIL_ATTACHMENT_DOWNLOAD_LIMIT || (isPdf && !bytes.subarray(0, 1024).includes('%PDF-'))) return res.redirect(gmailThreadUrl(messageId))
-  res.set('X-Content-Type-Options', 'nosniff')
-  // PDFs and real images open in the browser tab; everything else downloads.
-  const viewable = viewableAttachmentType(bytes)
-  if (viewable) {
-    const fallback = String(file.name || 'attachment').replace(/[^\x20-\x7e]|["\\]/g, '_')
-    res.set('Content-Disposition', `inline; filename="${fallback}"; filename*=UTF-8''${encodeURIComponent(file.name || 'attachment')}`)
-    if (viewable !== 'application/pdf') res.set('Content-Security-Policy', "default-src 'none'; img-src 'self'; style-src 'unsafe-inline'; sandbox")
-    return res.type(viewable).send(bytes)
-  }
-  res.attachment(file.name).type(isPdf ? 'application/pdf' : 'application/octet-stream').send(bytes)
+  sendViewableFile(res, bytes, file.name, isPdf ? 'application/pdf' : 'application/octet-stream')
 })
 app.post('/api/deals/:id/gmail/link', sameSiteWrite, async (req, res, next) => {
   try {

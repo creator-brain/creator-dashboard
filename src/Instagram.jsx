@@ -79,17 +79,17 @@ const instagramInboxUrl = username => /^[\w.]{1,30}$/.test(username || '') ? `ht
 
 const mediaLabels = { image: 'Open image', video: 'Open video', pdf: 'Open PDF', file: 'Open file', share: 'Open shared post', story: 'Open Story' }
 
-function InstagramMessageMedia({ item, inboxUrl }) {
+function InstagramMessageMedia({ item, src, inboxUrl }) {
   const [failed, setFailed] = useState(false)
   if (failed) return <a href={inboxUrl} target="_blank" rel="noopener noreferrer" className="link link-primary text-xs">Preview unavailable · Open in Instagram</a>
-  if (item.preview && item.type === 'video') return <video controls preload="none" src={item.url}
+  if (item.preview && item.type === 'video') return <video controls preload="none" src={src}
     className="max-h-72 w-full rounded-lg bg-base-300" onError={() => setFailed(true)} />
-  if (item.preview && item.type === 'image') return <a href={item.url} target="_blank" rel="noopener noreferrer">
-    <img src={item.url} alt={item.name || 'Image attached to this message'} loading="lazy" referrerPolicy="no-referrer"
+  if (item.preview && item.type === 'image') return <a href={src} target="_blank" rel="noopener noreferrer">
+    <img src={src} alt={item.name || 'Image attached to this message'} loading="lazy" referrerPolicy="no-referrer"
       className="max-h-72 max-w-full rounded-lg object-contain" onError={() => setFailed(true)} />
   </a>
   const Icon = item.type === 'pdf' || item.type === 'file' ? FileText : ExternalLink
-  return <a href={item.url} target="_blank" rel="noopener noreferrer" className="link link-primary inline-flex items-baseline gap-1.5 wrap-anywhere text-xs">
+  return <a href={src} target="_blank" rel="noopener noreferrer" className="link link-primary inline-flex items-baseline gap-1.5 wrap-anywhere text-xs">
     <Icon size={13} className="shrink-0 self-center" aria-hidden="true" />
     <span>{item.name || mediaLabels[item.type]}</span>
   </a>
@@ -100,22 +100,22 @@ const mediaKinds = {
   share: ['Shared post', ExternalLink], story: ['Story', ExternalLink],
 }
 
-const instagramFileHost = url => { try { const host = new URL(url).hostname; return ['fbsbx.com', 'cdninstagram.com', 'fbcdn.net'].some(d => host === d || host.endsWith('.' + d)) } catch { return false } }
-
-function AttachmentThumb({ item, Icon }) {
+// Attachments load through the dashboard's server, which asks Meta for a fresh link each time.
+function AttachmentThumb({ item, src, Icon }) {
   const [failed, setFailed] = useState(false)
-  if (item.preview && item.type === 'image' && !failed) return <img src={item.url} alt="" loading="lazy" referrerPolicy="no-referrer"
+  if (item.preview && item.type === 'image' && !failed) return <img src={src} alt="" loading="lazy"
     className="h-full w-full object-cover" onError={() => setFailed(true)} />
-  if (item.preview && item.type === 'video' && !failed) return <video src={`${item.url}#t=0.1`} muted playsInline preload="metadata" aria-hidden="true"
+  if (item.preview && item.type === 'video' && !failed) return <video src={`${src}#t=0.1`} muted playsInline preload="metadata" aria-hidden="true"
     className="pointer-events-none h-full w-full object-cover" onError={() => setFailed(true)} />
-  if (item.type === 'pdf' && instagramFileHost(item.url)) return <PdfThumbnail url={item.url} />
+  if (item.type === 'pdf') return <PdfThumbnail url={src} />
   return <div className="grid h-full place-items-center text-primary/65"><Icon size={26} aria-hidden="true" /></div>
 }
 
 // Every image, video, file, shared post and Story across the conversation, like an email thread's attachments.
-export function InstagramAttachments({ messages }) {
+export function InstagramAttachments({ messages, mediaUrl }) {
   const seen = new Set()
-  const items = messages.flatMap(message => message.media || []).filter(item => item.url && !seen.has(item.url) && seen.add(item.url))
+  const items = messages.flatMap(message => (message.media || []).map((item, index) => ({ ...item, src: mediaUrl(message.id, index) })))
+    .filter(item => item.url && !seen.has(item.url) && seen.add(item.url))
   if (!items.length) return null
   return <section className="space-y-2" aria-label="Instagram attachments">
     <h4 className="text-sm font-semibold">Attachments</h4>
@@ -123,9 +123,9 @@ export function InstagramAttachments({ messages }) {
       {items.map(item => {
         const [kind, Icon] = mediaKinds[item.type] || ['Attachment', File]
         return <li key={item.url} className="min-w-0">
-          <a href={item.url} target="_blank" rel="noopener noreferrer" title={item.name || kind}
+          <a href={item.src} target="_blank" rel="noopener noreferrer" title={item.name || kind}
             className="card h-full overflow-hidden rounded-lg border border-base-300 bg-base-100 hover:border-primary focus-visible:outline-2 focus-visible:outline-primary">
-            <div className="h-24 overflow-hidden border-b border-base-300 bg-base-200"><AttachmentThumb item={item} Icon={Icon} /></div>
+            <div className="h-24 overflow-hidden border-b border-base-300 bg-base-200"><AttachmentThumb item={item} src={item.src} Icon={Icon} /></div>
             <div className="flex items-center gap-2 p-2">
               <span className="min-w-0 grow">
                 <span className="block truncate text-xs font-semibold">{item.name || kind}</span>
@@ -201,6 +201,7 @@ export function InstagramPanel({ deal, onLinked, onUnlocked }) {
   const [sendError, setSendError] = useState('')
   const [sending, setSending] = useState(false)
   const path = `/meta/deals/${deal.id}`
+  const mediaUrl = (messageId, index) => `/api${path}/messages/${encodeURIComponent(messageId)}/media/${index}`
   const inboxUrl = instagramInboxUrl(conversation?.username)
   useEffect(() => { setReply(''); setSendNotice(''); setSendError('') }, [conversation?.id])
   useEffect(() => () => searchRequest.current?.abort(), [])
@@ -380,12 +381,12 @@ export function InstagramPanel({ deal, onLinked, onUnlocked }) {
         <summary className="cursor-pointer text-sm font-medium">{message.outgoing ? 'You' : message.sender ? `@${message.sender}` : 'Instagram'} <time className="ml-1 text-xs font-normal opacity-65">{messageDate(message.date)}</time></summary>
         {message.text && <div className="text-sm"><MessageText text={message.text} /></div>}
         {message.media?.length > 0 && <ul className="mt-2 space-y-2" aria-label="Instagram attachments and shares">
-          {message.media.map(item => <li key={item.url}><InstagramMessageMedia item={item} inboxUrl={inboxUrl} /></li>)}
+          {message.media.map((item, index) => <li key={item.url}><InstagramMessageMedia item={item} src={mediaUrl(message.id, index)} inboxUrl={inboxUrl} /></li>)}
         </ul>}
         {(message.unsupported || (!message.text && !message.media?.length)) &&
           <a href={inboxUrl} target="_blank" rel="noopener noreferrer" className="link link-primary mt-2 inline-flex items-center gap-1 text-sm">View media or share in Instagram <ExternalLink size={13} /></a>}
       </details>)}
-      <InstagramAttachments messages={conversation.messages} />
+      <InstagramAttachments messages={conversation.messages} mediaUrl={mediaUrl} />
       <ThreadLinks messages={conversation.messages} label="Instagram links" />
       {!choices && <form onSubmit={sendReply} className="space-y-2 rounded-xl border border-base-300 p-3">
         <label className="block text-sm font-medium">Reply on Instagram

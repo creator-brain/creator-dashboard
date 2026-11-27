@@ -563,6 +563,37 @@ function instagramMessageMedia(message) {
   return [...media.values()]
 }
 
+export const INSTAGRAM_FILE_LIMIT = 4 * 1024 * 1024
+const instagramFileHost = host => ['cdninstagram.com', 'fbcdn.net', 'fbsbx.com'].some(domain => host === domain || host.endsWith('.' + domain))
+
+// Fetches one attachment of one message in a linked conversation, with a fresh link from Meta.
+// Returns { bytes, name } for a small file on Instagram's own servers, or { redirect } to the fresh link otherwise.
+export async function instagramMessageFile(session, conversationId, messageId, index) {
+  if (!/^[\w=-]{1,512}$/.test(messageId || '') || !/^\d{1,2}$/.test(String(index))) throw failure('Invalid Instagram attachment.', 400)
+  const row = await loadConversation(session, conversationId, true)
+  const message = (row.messages?.data || []).find(item => item.id === messageId)
+  const item = message && instagramMessageMedia(message)[Number(index)]
+  if (!item) throw failure('Attachment not found in this Instagram conversation.', 404)
+  if (item.type === 'share' || item.type === 'story' || !instagramFileHost(new URL(item.url).hostname)) return { redirect: item.url }
+  const response = await fetch(item.url, { redirect: 'follow', signal: AbortSignal.timeout(15000) }).catch(() => null)
+  if (!response?.ok || !response.body || !instagramFileHost(new URL(response.url || item.url).hostname)) {
+    await response?.body?.cancel().catch(() => {})
+    return { redirect: item.url }
+  }
+  if (Number(response.headers.get('content-length')) > INSTAGRAM_FILE_LIMIT) {
+    await response.body.cancel().catch(() => {})
+    return { redirect: item.url }
+  }
+  const chunks = []
+  let size = 0
+  for await (const chunk of response.body) {
+    size += chunk.length
+    if (size > INSTAGRAM_FILE_LIMIT) return { redirect: item.url }
+    chunks.push(chunk)
+  }
+  return { bytes: Buffer.concat(chunks), name: item.name || '' }
+}
+
 function replyParticipant(row, accountId) {
   const others = row.participants?.data?.filter(person => person.id !== accountId) || []
   return others.length === 1 && /^\d+$/.test(others[0].id || '') ? others[0] : null
