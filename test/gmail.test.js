@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { currentMessageText, gmailThreadUrl, makeMessage, replyDetails, summarizeThread, threadIdFromUrl } from '../server/gmail.js'
+import { currentMessageText, gmailThreadUrl, makeMessage, replyDetails, summarizeThread, threadIdFromUrl, viewableAttachmentType } from '../server/gmail.js'
 import { threadMessageLinks } from '../src/messageLinks.js'
 
 test('accepts only Gmail thread links', () => {
@@ -211,7 +211,8 @@ test('downloads attachments only from the Gmail thread linked to the deal', asyn
   assert.equal(attachmentRequests.length, 0)
   const download = await attachment('message', 0, session)
   assert.equal(download.status, 200)
-  assert.match(download.headers.get('content-disposition'), /attachment; filename=Brief\.pdf/)
+  assert.match(download.headers.get('content-disposition'), /^inline; filename="Brief\.pdf"/)
+  assert.equal(download.headers.get('content-type'), 'application/pdf')
   assert.equal(download.headers.get('x-content-type-options'), 'nosniff')
   assert.deepEqual(Buffer.from(await download.arrayBuffer()), pdf)
   assert.deepEqual(Buffer.from(await (await attachment('message', 1, session)).arrayBuffer()), pdf)
@@ -224,4 +225,15 @@ test('downloads attachments only from the Gmail thread linked to the deal', asyn
   assert.match(file.headers.get('content-disposition'), /attachment; filename=brief\.html/)
   assert.equal(await file.text(), '<h1>Brief</h1>')
   assert.equal(attachmentRequests.length, 1)
+})
+
+test('opens only real PDFs and images in the browser, judged by their bytes', () => {
+  const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0])
+  assert.equal(viewableAttachmentType(Buffer.from('%PDF-1.7 ...')), 'application/pdf')
+  assert.equal(viewableAttachmentType(png), 'image/png')
+  assert.equal(viewableAttachmentType(Buffer.from([0xff, 0xd8, 0xff, 0xe0])), 'image/jpeg')
+  assert.equal(viewableAttachmentType(Buffer.from('GIF89a....')), 'image/gif')
+  assert.equal(viewableAttachmentType(Buffer.from('RIFF\0\0\0\0WEBPVP8 ')), 'image/webp')
+  assert.equal(viewableAttachmentType(Buffer.from('<svg onload="alert(1)"></svg>')), '')
+  assert.equal(viewableAttachmentType(Buffer.from('<html><script>alert(1)</script></html>')), '')
 })

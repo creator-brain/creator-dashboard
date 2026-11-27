@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState } from "react";
-import { Download, ExternalLink, File, FileText, Link2 } from "lucide-react";
+import { Download, ExternalLink, File, FileText, Image as ImageIcon, Link2 } from "lucide-react";
 import workerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
 import { threadMessageLinks } from "./messageLinks.js";
 
-function PdfThumbnail({ url }) {
+export function PdfThumbnail({ url }) {
   const container = useRef(null);
   const canvas = useRef(null);
   const [ready, setReady] = useState(false);
@@ -59,6 +59,14 @@ function PdfThumbnail({ url }) {
   );
 }
 
+const IMAGE_TYPES = new Set(["image/png", "image/jpeg", "image/gif", "image/webp"]);
+
+function ImageThumbnail({ url, Icon }) {
+  const [failed, setFailed] = useState(false);
+  if (failed) return <div className="grid h-full place-items-center text-primary/65"><Icon size={26} aria-hidden="true" /></div>;
+  return <img src={url} alt="" loading="lazy" className="h-full w-full object-cover" onError={() => setFailed(true)} />;
+}
+
 export function GmailAttachments({ messages, gmailUrl, formatSize }) {
   const files = messages.flatMap((mail) => {
     const attachments = mail.attachments ?? mail.pdfs?.map((pdf) => ({ ...pdf, mimeType: "application/pdf" })) ?? [];
@@ -80,8 +88,10 @@ export function GmailAttachments({ messages, gmailUrl, formatSize }) {
       <ul className="grid grid-cols-[repeat(auto-fill,minmax(min(100%,9rem),1fr))] gap-2">
         {files.map(({ key, name, mimeType, href, size, downloadable }) => {
           const isPdf = mimeType === "application/pdf";
-          const FileIcon = isPdf ? FileText : File;
-          const ActionIcon = downloadable ? Download : ExternalLink;
+          const isImage = IMAGE_TYPES.has(mimeType);
+          const FileIcon = isPdf ? FileText : isImage ? ImageIcon : File;
+          const viewable = !downloadable || isPdf || isImage;
+          const ActionIcon = viewable ? ExternalLink : Download;
           return (
             <li key={key} className="min-w-0">
               <a href={href} target="_blank" rel="noopener noreferrer" title={name}
@@ -89,6 +99,8 @@ export function GmailAttachments({ messages, gmailUrl, formatSize }) {
                 <div className="h-24 overflow-hidden border-b border-base-300 bg-base-200">
                   {isPdf && downloadable ? (
                     <PdfThumbnail key={href} url={href} />
+                  ) : isImage && downloadable ? (
+                    <ImageThumbnail key={href} url={href} Icon={FileIcon} />
                   ) : (
                     <div className="grid h-full place-items-center text-primary/65">
                       <FileIcon size={26} aria-hidden="true" />
@@ -100,7 +112,7 @@ export function GmailAttachments({ messages, gmailUrl, formatSize }) {
                     <span className="block truncate text-xs font-semibold">{name}</span>
                     <span className="block text-[11px] text-base-content/70">
                       {isPdf && "PDF · "}
-                      {downloadable ? (size == null ? "Download" : formatSize(size)) : "Open in Gmail"}
+                      {!downloadable ? "Open in Gmail" : `${viewable ? "Open" : "Download"}${size == null ? "" : ` · ${formatSize(size)}`}`}
                     </span>
                   </span>
                   <ActionIcon size={14} className="shrink-0 text-primary" aria-hidden="true" />

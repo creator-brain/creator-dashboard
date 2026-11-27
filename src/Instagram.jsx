@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { ExternalLink, File, FileText, Film, Image as ImageIcon, Instagram, Send } from 'lucide-react'
-import { ThreadLinks } from './GmailAttachments.jsx'
+import { PdfThumbnail, ThreadLinks } from './GmailAttachments.jsx'
 import { IntegrationCard } from './IntegrationCard.jsx'
 import { MessageText } from './MessageText.jsx'
 import { api, INSTAGRAM_MESSAGE_LIMIT, INSTAGRAM_REPLY_LIMIT, normalizeInstagramHandle } from './model.js'
@@ -100,10 +100,15 @@ const mediaKinds = {
   share: ['Shared post', ExternalLink], story: ['Story', ExternalLink],
 }
 
+const instagramFileHost = url => { try { const host = new URL(url).hostname; return ['fbsbx.com', 'cdninstagram.com', 'fbcdn.net'].some(d => host === d || host.endsWith('.' + d)) } catch { return false } }
+
 function AttachmentThumb({ item, Icon }) {
   const [failed, setFailed] = useState(false)
   if (item.preview && item.type === 'image' && !failed) return <img src={item.url} alt="" loading="lazy" referrerPolicy="no-referrer"
     className="h-full w-full object-cover" onError={() => setFailed(true)} />
+  if (item.preview && item.type === 'video' && !failed) return <video src={`${item.url}#t=0.1`} muted playsInline preload="metadata" aria-hidden="true"
+    className="pointer-events-none h-full w-full object-cover" onError={() => setFailed(true)} />
+  if (item.type === 'pdf' && instagramFileHost(item.url)) return <PdfThumbnail url={item.url} />
   return <div className="grid h-full place-items-center text-primary/65"><Icon size={26} aria-hidden="true" /></div>
 }
 

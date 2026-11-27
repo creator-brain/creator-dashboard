@@ -5,7 +5,7 @@ import { parseEnv } from 'node:util'
 import { DATA_SOURCE_ID, INSTAGRAM_CONVERSATION, instagramConversationId, instagramLinkHandle, notion, pageMarkdown, reconcileFollowUps, toDeal, unlinkedInstagramDeals, updateDeal } from './notion.js'
 import { normalizeInstagramHandle, sourceOf } from '../src/model.js'
 import { instagramAnalytics, instagramConfigured, instagramConversation, instagramConversations, instagramDailyMetric, instagramLock, instagramScorecard, instagramSession, instagramUnlock, sendInstagramReply, validConversationId } from './instagram.js'
-import { gmailAttachmentParts, gmailAuthorize, gmailCallback, gmailConfigured, gmailConnected, gmailDisconnect, gmailPdfParts, gmailRequest, gmailThreadUrl, GMAIL_ATTACHMENT_DOWNLOAD_LIMIT, makeMessage, replyDetails, summarizeThread, threadIdFromUrl } from './gmail.js'
+import { gmailAttachmentParts, gmailAuthorize, gmailCallback, gmailConfigured, gmailConnected, gmailDisconnect, gmailPdfParts, gmailRequest, gmailThreadUrl, GMAIL_ATTACHMENT_DOWNLOAD_LIMIT, makeMessage, viewableAttachmentType, replyDetails, summarizeThread, threadIdFromUrl } from './gmail.js'
 import { validWebhookSignature, webhookChallenge } from './metaWebhook.js'
 import { tiktokAnalytics, tiktokAuthorize, tiktokCallback, tiktokDisconnect, tiktokStatus } from './tiktok.js'
 
@@ -205,7 +205,16 @@ app.get('/api/deals/:id/gmail/messages/:messageId/:kind/:index', async (req, res
   const bytes = Buffer.from(body.data, 'base64url')
   const isPdf = file.mimeType === 'application/pdf'
   if (bytes.length > GMAIL_ATTACHMENT_DOWNLOAD_LIMIT || (isPdf && !bytes.subarray(0, 1024).includes('%PDF-'))) return res.redirect(gmailThreadUrl(messageId))
-  res.attachment(file.name).type(isPdf ? 'application/pdf' : 'application/octet-stream').set('X-Content-Type-Options', 'nosniff').send(bytes)
+  res.set('X-Content-Type-Options', 'nosniff')
+  // PDFs and real images open in the browser tab; everything else downloads.
+  const viewable = viewableAttachmentType(bytes)
+  if (viewable) {
+    const fallback = String(file.name || 'attachment').replace(/[^\x20-\x7e]|["\\]/g, '_')
+    res.set('Content-Disposition', `inline; filename="${fallback}"; filename*=UTF-8''${encodeURIComponent(file.name || 'attachment')}`)
+    if (viewable !== 'application/pdf') res.set('Content-Security-Policy', "default-src 'none'; img-src 'self'; style-src 'unsafe-inline'; sandbox")
+    return res.type(viewable).send(bytes)
+  }
+  res.attachment(file.name).type(isPdf ? 'application/pdf' : 'application/octet-stream').send(bytes)
 })
 app.post('/api/deals/:id/gmail/link', sameSiteWrite, async (req, res, next) => {
   try {
