@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
-import { ExternalLink, Instagram, Send } from 'lucide-react'
+import { ExternalLink, FileText, Instagram, Send } from 'lucide-react'
 import { IntegrationCard } from './IntegrationCard.jsx'
+import { MessageText } from './MessageText.jsx'
 import { api, INSTAGRAM_MESSAGE_LIMIT, INSTAGRAM_REPLY_LIMIT, normalizeInstagramHandle } from './model.js'
 
 function useInstagramStatus() {
@@ -69,10 +70,29 @@ const messageDate = date => date && Number.isFinite(Date.parse(date)) ? new Date
   timeZone: 'Asia/Singapore', dateStyle: 'medium', timeStyle: 'short',
 }) : ''
 const matchingConversations = (conversations, handle) => conversations.filter(item => normalizeInstagramHandle(item.username) === handle)
+const participantSearchText = value => normalizeInstagramHandle(value).replace(/[.\s_-]+/g, '')
 const mergeConversations = (existing, incoming) => [...new Map([...existing, ...incoming].map(item => [item.id, item])).values()]
 const conversationPage = (after, signal) => api(`/meta/conversations${after ? `?${new URLSearchParams({ after })}` : ''}`, { signal })
 const pauseInbox = () => new Promise(resolve => setTimeout(resolve, 600))
 const instagramInboxUrl = username => /^[\w.]{1,30}$/.test(username || '') ? `https://ig.me/m/${encodeURIComponent(username)}` : 'https://www.instagram.com/direct/inbox/'
+
+const mediaLabels = { image: 'Open image', video: 'Open video', pdf: 'Open PDF', file: 'Open file', share: 'Open shared post', story: 'Open Story' }
+
+function InstagramMessageMedia({ item, inboxUrl }) {
+  const [failed, setFailed] = useState(false)
+  if (failed) return <a href={inboxUrl} target="_blank" rel="noopener noreferrer" className="link link-primary text-xs">Preview unavailable · Open in Instagram</a>
+  if (item.preview && item.type === 'video') return <video controls preload="none" src={item.url}
+    className="max-h-72 w-full rounded-lg bg-base-300" onError={() => setFailed(true)} />
+  if (item.preview && item.type === 'image') return <a href={item.url} target="_blank" rel="noopener noreferrer">
+    <img src={item.url} alt={item.name || 'Image attached to this message'} loading="lazy" referrerPolicy="no-referrer"
+      className="max-h-72 max-w-full rounded-lg object-contain" onError={() => setFailed(true)} />
+  </a>
+  const Icon = item.type === 'pdf' || item.type === 'file' ? FileText : ExternalLink
+  return <a href={item.url} target="_blank" rel="noopener noreferrer" className="link link-primary inline-flex items-baseline gap-1.5 wrap-anywhere text-xs">
+    <Icon size={13} className="shrink-0 self-center" aria-hidden="true" />
+    <span>{item.name || mediaLabels[item.type]}</span>
+  </a>
+}
 
 async function findInboxMatches(handle, page, { signal, maxPages = Infinity, onPage }) {
   const seen = new Set()
@@ -196,10 +216,7 @@ export function InstagramPanel({ deal, onLinked, onUnlocked }) {
   function searchByHandle(event) {
     event.preventDefault()
     const username = normalizeInstagramHandle(handle)
-    if (!/^[a-z0-9._]{1,30}$/.test(username)) {
-      setError('Enter an Instagram username, such as @brand.')
-      return
-    }
+    if (busy || !/^[a-z0-9._]{1,30}$/.test(username)) return
     setSearchedHandle(username)
     setSelected('')
     return run(async () => {
@@ -251,7 +268,14 @@ export function InstagramPanel({ deal, onLinked, onUnlocked }) {
     } catch (reason) { setSendError(reason.message) }
     finally { setSending(false) }
   }
-  const visibleChoices = !choices ? [] : searchedHandle ? matchingConversations(choices.conversations, searchedHandle) : choices.conversations
+  const searchText = participantSearchText(handle)
+  const visibleChoices = choices?.conversations.filter(item =>
+    !searchText || participantSearchText(item.username || '').includes(searchText),
+  ) ?? []
+  const searching = busy && Boolean(searchedHandle)
+  const normalizedHandle = normalizeInstagramHandle(handle)
+  const canSearchByHandle = /^[a-z0-9._]{1,30}$/.test(normalizedHandle)
+  const needsExactSearch = choices?.after && !matchingConversations(choices.conversations, normalizedHandle).length
   return <section className="space-y-3">
     <h3 className="section-title">Instagram conversation</h3>
     {(error || statusError) && <p className="text-sm text-error" role="alert">{error || statusError}</p>}
@@ -267,25 +291,35 @@ export function InstagramPanel({ deal, onLinked, onUnlocked }) {
     </div>}
     {choices && <div className="space-y-3">
       <form className="space-y-2" onSubmit={searchByHandle}>
-        <label className="block text-xs">Brand or agency Instagram handle
-          <input className="input input-bordered mt-1 w-full" value={handle} placeholder="@brand" disabled={busy}
+        <label className="block text-xs">Conversation participant
+          <input className="input input-bordered mt-1 w-full" value={handle} placeholder="Search by Instagram handle"
+            autoComplete="off" spellCheck={false} disabled={busy}
             onChange={event => { setHandle(event.target.value); setSearchedHandle(''); setSelected(''); setError('') }} />
         </label>
         <div className="flex flex-wrap gap-2">
-          <button className="btn btn-outline btn-sm" disabled={busy || !handle.trim()} type="submit">{busy && searchedHandle ? 'Searching…' : searchedHandle && !visibleChoices.length && choices.after ? 'Search more' : 'Find conversation'}</button>
-          {searchedHandle && <button className="btn btn-ghost btn-sm" type="button" disabled={busy} onClick={clearSearch}>Show all</button>}
+          {(searching || needsExactSearch) && <button className="btn btn-outline btn-sm" disabled={busy || !canSearchByHandle} type="submit">
+            {searching ? <><span className="loading loading-spinner loading-xs" aria-hidden="true" /><span className="sr-only">Searching conversations</span></>
+              : searchedHandle ? 'Search more by exact handle' : 'Find exact handle'}</button>}
+          {handle && <button className="btn btn-ghost btn-sm" type="button" disabled={busy} onClick={clearSearch}>Clear search</button>}
         </div>
       </form>
       <form className="space-y-2" onSubmit={link}>
-      {visibleChoices.length ? <label className="block text-xs">Conversation participant
-        <select className="select select-bordered mt-1 w-full" value={selected} onChange={event => setSelected(event.target.value)}>
-          <option value="">Choose the brand or agency account</option>
-          {visibleChoices.map(item => <option key={item.id} value={item.id}>{item.username ? `@${item.username}` : `Conversation ${item.id.slice(-10)}`} · {messageDate(item.updatedAt)}</option>)}
-        </select>
-      </label> : !busy && <p className="text-sm text-base-content/60" role="status">{searchedHandle ? `No match for @${searchedHandle}${choices.after ? ' in the conversations checked so far' : ''}.` : 'No conversations found.'}</p>}
+      {!busy && <p className="text-xs text-base-content/65" role="status">
+        {searchText ? `${visibleChoices.length} ${visibleChoices.length === 1 ? 'match' : 'matches'}${choices.after ? ' in loaded conversations' : ''}`
+          : visibleChoices.length ? 'Choose the brand or agency account' : 'No conversations found.'}
+      </p>}
+      {visibleChoices.length > 0 && <fieldset className="max-h-48 space-y-1 overflow-y-auto rounded-xl border border-base-300 p-1" disabled={busy}>
+        <legend className="sr-only">Matching conversations</legend>
+        {visibleChoices.map(item => <label key={item.id} className="flex cursor-pointer items-center gap-2 rounded-lg px-2 py-2 hover:bg-base-200">
+          <input className="radio radio-sm radio-primary" type="radio" name="instagram-conversation"
+            value={item.id} checked={selected === item.id} onChange={() => setSelected(item.id)} />
+          <span className="min-w-0 flex-1 break-words text-sm">{item.username ? `@${item.username}` : `Conversation ${item.id.slice(-10)}`}</span>
+          {item.updatedAt && <time className="shrink-0 text-xs text-base-content/65" dateTime={item.updatedAt}>{messageDate(item.updatedAt)}</time>}
+        </label>)}
+      </fieldset>}
       <div className="flex flex-wrap gap-2">
         <button className="btn btn-primary btn-sm" type="submit" disabled={busy || !selected}>Save to Notion</button>
-        {choices.after && !searchedHandle && <button className="btn btn-outline btn-sm" type="button" disabled={busy} onClick={() => loadChoices(choices.after)}>Load more</button>}
+        {choices.after && <button className="btn btn-outline btn-sm" type="button" disabled={busy} onClick={() => loadChoices(choices.after)}>Load more</button>}
         <button className="btn btn-ghost btn-sm" type="button" disabled={busy} onClick={() => { setChoices(null); clearSearch() }}>Cancel</button>
       </div>
       </form>
@@ -298,8 +332,12 @@ export function InstagramPanel({ deal, onLinked, onUnlocked }) {
       {!conversation.messages.length && <p className="text-sm text-base-content/60">No recent messages returned by Instagram.</p>}
       {conversation.messages.map((message, index) => <details key={`${conversation.id}:${message.id}`} open={index === 0} className={`rounded-xl border p-3 ${message.outgoing ? 'message-outgoing' : 'border-base-300'}`}>
         <summary className="cursor-pointer text-sm font-medium">{message.outgoing ? 'You' : message.sender ? `@${message.sender}` : 'Instagram'} <time className="ml-1 text-xs font-normal opacity-65">{messageDate(message.date)}</time></summary>
-        {message.text ? <p className="mt-2 whitespace-pre-wrap break-words text-sm">{message.text}</p>
-          : <a href={inboxUrl} target="_blank" rel="noopener noreferrer" className="link link-primary mt-2 inline-flex items-center gap-1 text-sm">View media or share in Instagram <ExternalLink size={13} /></a>}
+        {message.text && <div className="text-sm"><MessageText text={message.text} /></div>}
+        {message.media?.length > 0 && <ul className="mt-2 space-y-2" aria-label="Instagram attachments and shares">
+          {message.media.map(item => <li key={item.url}><InstagramMessageMedia item={item} inboxUrl={inboxUrl} /></li>)}
+        </ul>}
+        {(message.unsupported || (!message.text && !message.media?.length)) &&
+          <a href={inboxUrl} target="_blank" rel="noopener noreferrer" className="link link-primary mt-2 inline-flex items-center gap-1 text-sm">View media or share in Instagram <ExternalLink size={13} /></a>}
       </details>)}
       {!choices && <form onSubmit={sendReply} className="space-y-2 rounded-xl border border-base-300 p-3">
         <label className="block text-sm font-medium">Reply on Instagram

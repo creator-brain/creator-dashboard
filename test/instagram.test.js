@@ -21,7 +21,16 @@ test('Instagram inbox unlock gates reads and saves the selected inbox conversati
     id: conversationId, updated_time: '2026-11-21T17:00:00Z',
     participants: { data: [account, { id: '67890', username: 'brand' }] },
     messages: { data: [{ id: 'old', created_time: '2026-11-21T10:00:00Z', from: account, message: 'Hello' },
-      { id: 'new', created_time: '2026-11-21T17:00:00Z', from: { id: '67890', username: 'brand' }, message: 'Thanks!' }] },
+      { id: 'new', created_time: '2026-11-21T17:00:00Z', from: { id: '67890', username: 'brand' }, message: 'Thanks!',
+        attachments: { data: [
+          { image_data: { url: 'https://scontent.cdninstagram.com/image.jpg' } },
+          { video_data: { url: 'https://video.fbcdn.net/video.mp4' } },
+          { name: 'Brief.pdf', file_url: 'https://lookaside.fbsbx.com/file' },
+          { image_data: { url: 'https://external.example/image.png' } },
+          { file_url: 'javascript:alert(1)' },
+        ] },
+        shares: { data: [{ name: 'A Reel', url: 'https://www.instagram.com/reel/example/' }] },
+      }] },
   }
   Object.assign(process.env, {
     VERCEL: '1', META_ACCESS_TOKEN: 'meta-token', META_IG_ACCOUNT_ID: account.id, META_INBOX_KEY: inboxKey,
@@ -215,6 +224,21 @@ test('Instagram inbox unlock gates reads and saves the selected inbox conversati
   assert.equal(sevenDays.measuredPosts, 1)
   assert.equal(sevenDays.engagement, 50)
   assert.equal(sevenDays.weekly[0].engagement, 21)
+  const until = new Date(analyticsEnd).toISOString().slice(0, 10)
+  assert.equal((await request('/analytics?section=profile', { headers })).status, 400)
+  assert.equal((await request('/analytics?until=invalid', { headers })).status, 400)
+  const callsBeforeSummary = stub.mock.callCount()
+  const { analytics: summary } = await (await request(`/analytics?days=7&section=account&until=${until}`, { headers })).json()
+  assert.equal(summary.views, sevenDays.views)
+  assert.equal(summary.followers, sevenDays.followers)
+  assert.equal(summary.featuredPosts, undefined)
+  assert.ok(stub.mock.calls.slice(callsBeforeSummary).every(({ arguments: [input] }) => {
+    const path = new URL(input).pathname
+    return path === '/v27.0/12345' || path === '/v27.0/12345/insights'
+  }))
+  const { analytics: content } = await (await request(`/analytics?days=7&section=content&until=${until}`, { headers })).json()
+  assert.equal(content.postsByWeek[summary.weekly[0].start], sevenDays.weekly[0].posts)
+  assert.deepEqual(content.featuredPosts, sevenDays.featuredPosts)
   const { weekdays, windows } = sevenDays.reachByPublishingTime
   assert.deepEqual(weekdays.map(bucket => bucket.label), ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'])
   const singaporeWeekday = new Date(analyticsEnd - 9 * day).getUTCDay()
@@ -297,6 +321,13 @@ test('Instagram inbox unlock gates reads and saves the selected inbox conversati
   assert.equal(page.properties[instagramField].rich_text[0].text.content, conversationId)
   const { conversation } = await (await request('/deals/' + pageId, { headers })).json()
   assert.deepEqual(conversation.messages.map(message => message.id), ['new', 'old'])
+  assert.deepEqual(conversation.messages[0].media.map(({ type, name, preview }) => ({ type, name, preview })), [
+    { type: 'image', name: '', preview: true },
+    { type: 'video', name: '', preview: true },
+    { type: 'pdf', name: 'Brief.pdf', preview: false },
+    { type: 'image', name: '', preview: false },
+    { type: 'share', name: 'A Reel', preview: false },
+  ])
   const reply = (text, id = conversationId) => request('/deals/' + pageId + '/send', {
     headers, method: 'POST', body: JSON.stringify({ conversationId: id, text, recipient: 'ignored' }),
   })

@@ -15,3 +15,8 @@ export function contentMetrics({ views, reach, likes, comments, shares, saves, c
   return { views: metricCount(views), reach: metricCount(reach), likes: metricCount(likes),
     comments: metricCount(comments), shares: metricCount(shares), saves: metricCount(saves), clicks: metricCount(clicks) }
 }
+
+export function combinedAudience(accounts) {
+  if (accounts.length < 2 || accounts.some(account => account.followers == null)) return null
+  return accounts.reduce((total, account) => total + account.followers, 0)
+}

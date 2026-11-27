@@ -1,5 +1,5 @@
 import { useEffect, useId, useState } from "react";
-import { CalendarDays, ExternalLink, Eye, Heart, Image, Instagram, LayoutGrid, RefreshCw, Users } from "lucide-react";
+import { CalendarDays, ExternalLink, Eye, Heart, Image, Instagram, LayoutGrid, Music2, RefreshCw, Users } from "lucide-react";
 import { Bar, BarChart, CartesianGrid, Line, LineChart, Pie, PieChart, Rectangle, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import overviewCat from "./assets/overview-cat.png";
 import { api } from "./model.js";
@@ -81,14 +81,14 @@ function TrendChart({ values, showEveryLabel = false, line = false }) {
       </ResponsiveContainer>
       <ul className="sr-only">
         {values.map(({ label, fullLabel, value, detail, highlight }) => (
-          <li key={label}>{fullLabel || label} · {format(value)} {detail}{highlight && " · Highest total"}</li>
+          <li key={fullLabel || label}>{fullLabel || label} · {format(value)} {detail}{highlight && " · Highest total"}</li>
         ))}
       </ul>
     </div>
   );
 }
 
-function WeeklyTrends({ weekly, days, trendInterval, setTrendInterval }) {
+function WeeklyTrends({ weekly, days, trendInterval, setTrendInterval, postsLoading }) {
   const [metric, setMetric] = useState("engagement");
   const [dailyResults, setDailyResults] = useState({});
   const hasDailyOption = metric === "engagement" || metric === "views";
@@ -142,7 +142,9 @@ function WeeklyTrends({ weekly, days, trendInterval, setTrendInterval }) {
           : metric === "engagement" ? "Account-wide likes, comments, shares and saves per week (UTC)."
           : "7-day periods. The first period may be shorter."}
       </p>
-      {daily && !dailyResult ? (
+      {metric === "posts" && postsLoading ? (
+        <span className="loading loading-spinner" role="status" aria-label="Loading published posts" />
+      ) : daily && !dailyResult ? (
         <span className="loading loading-spinner" role="status" aria-label={`Loading daily ${label.toLowerCase()}`} />
       ) : daily && dailyResult.error ? (
         <div className="flex flex-wrap items-center gap-2 text-sm" role="status">
@@ -256,19 +258,23 @@ function Stories({ items }) {
   );
 }
 
-function FeaturedPosts({ posts }) {
+function FeaturedPosts({ posts, platform = "Instagram" }) {
+  const tiktok = platform === "TikTok";
+  const titleId = useId();
   const [mode, setMode] = useState(() => posts.top.length ? "top" : "recent");
   const items = posts[mode];
   const ranked = mode === "top";
   const counts = items.flatMap(post => post.engagements == null ? [] : [post.engagements]);
   const rates = items.flatMap(post => post.engagementRate == null ? [] : [post.engagementRate]);
   return (
-    <section className={panel} aria-labelledby="featured-posts">
+    <section className={panel} aria-labelledby={titleId}>
       <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h2 id="featured-posts" className="font-display text-xl font-semibold">Post performance</h2>
+          <h2 id={titleId} className="font-display text-xl font-semibold">Post performance</h2>
           <p className="mt-1 text-xs text-base-content/75">
-            {ranked ? "Top 15 across your account, ranked by lifetime engagements" : "Your latest 15 posts with lifetime metrics"}
+            {ranked
+              ? tiktok ? "Latest 15 public videos, ranked by lifetime engagements" : "Top 15 across your account, ranked by lifetime engagements"
+              : "Your latest 15 posts with lifetime metrics"}
           </p>
         </div>
         <div className="join" role="group" aria-label="Post order">
@@ -280,27 +286,29 @@ function FeaturedPosts({ posts }) {
         </div>
       </div>
       <p className="mb-3 text-xs leading-relaxed text-base-content/75">
-        Engagements are likes, comments, shares and saves. The rate is engagements ÷ reach. Meta doesn’t provide link clicks for feed posts or Reels.
+        {tiktok
+          ? "Engagements are the sum of likes, comments and shares. Reach is unavailable for these videos."
+          : "Engagements are likes, comments, shares and saves. The rate is engagements ÷ reach. Meta doesn’t provide link clicks for feed posts or Reels."}
       </p>
       {items.length > 0 && (
         <div className="mb-4 rounded-xl bg-base-200/55 px-3 py-2">
           <MetricList entries={[
             ["Average engagements per post", mean(counts)],
-            ["Average engagement rate", percent(mean(rates))],
+            ...(!tiktok ? [["Average engagement rate", percent(mean(rates))]] : []),
           ]} />
           <p className="mt-1 text-xs text-base-content/75">
-            Engagement counts for {counts.length} of {items.length} posts · Rates for {rates.length}
+            Engagement counts for {counts.length} of {items.length} posts{!tiktok && ` · Rates for ${rates.length}`}
           </p>
         </div>
       )}
       {items.length ? (
-        <ol className="divide-y divide-base-300 rounded-xl border border-base-300" aria-label={ranked ? "Ranked Instagram posts" : "Recent Instagram posts"}>
+        <ol className="divide-y divide-base-300 rounded-xl border border-base-300" aria-label={`${ranked ? "Ranked" : "Recent"} ${platform} posts`}>
           {items.map((post, index) => (
             <li key={post.id} className="flex min-w-0 items-start gap-3 p-3 sm:items-center">
               {ranked && <span className="w-5 shrink-0 pt-1 text-right text-xs font-semibold tabular-nums text-base-content/75 sm:pt-0">{index + 1}</span>}
               <div className="relative flex size-14 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-base-200/50 sm:size-16">
                 {post.image ? (
-                  <img src={post.image} alt="" loading="lazy" className="absolute inset-0 size-full object-cover" />
+                  <img src={post.image} alt="" loading="lazy" referrerPolicy={tiktok ? "no-referrer" : undefined} className="absolute inset-0 size-full object-cover" />
                 ) : (
                   <Image size={24} className="text-base-content/50" aria-hidden="true" />
                 )}
@@ -308,16 +316,19 @@ function FeaturedPosts({ posts }) {
               <div className="min-w-0 flex-1 space-y-2">
                 <div className="flex items-start justify-between gap-2">
                   <div className="min-w-0">
-                    <p className="line-clamp-2 break-words text-sm font-medium">{post.caption || (post.type === "VIDEO" ? "Video" : "Instagram post")}</p>
+                    <p className="line-clamp-2 break-words text-sm font-medium">{post.caption || (post.type === "VIDEO" ? "Video" : `${platform} post`)}</p>
                     <time dateTime={post.date} className="block text-xs text-base-content/75">{postDates.format(new Date(post.date))}</time>
                   </div>
                   {post.url && (
-                    <a href={post.url} target="_blank" rel="noreferrer" className="btn btn-ghost btn-square btn-sm shrink-0" aria-label="Open post on Instagram">
+                    <a href={post.url} target="_blank" rel="noreferrer" className="btn btn-ghost btn-square btn-sm shrink-0" aria-label={`Open post on ${platform}`}>
                       <ExternalLink size={15} />
                     </a>
                   )}
                 </div>
-                <MetricList entries={[
+                <MetricList entries={tiktok ? [
+                    ["Engagements", post.engagements], ["Likes", post.metrics.likes],
+                    ["Comments", post.metrics.comments], ["Views", post.metrics.views], ["Shares", post.metrics.shares],
+                  ] : [
                     ["Engagements", post.engagements], ["Engagement rate", percent(post.engagementRate)],
                     ["Likes", post.likes], ["Comments", post.comments],
                     ["Views", post.insights?.views], ["Reach", post.reach],
@@ -340,9 +351,9 @@ function FeaturedPosts({ posts }) {
   );
 }
 
-function PublishingReachChart({ title, buckets }) {
-  const peak = Math.max(0, ...buckets.map(bucket => bucket.reach));
-  const peaks = buckets.filter(bucket => peak > 0 && bucket.reach === peak);
+function PublishingChart({ title, buckets, metric }) {
+  const peak = Math.max(0, ...buckets.map(bucket => bucket[metric] ?? 0));
+  const peaks = buckets.filter(bucket => peak > 0 && bucket[metric] === peak);
   return (
     <div className="min-w-0 rounded-xl border border-base-300 bg-base-200/35 p-3">
       <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
@@ -356,16 +367,18 @@ function PublishingReachChart({ title, buckets }) {
       <TrendChart showEveryLabel values={buckets.map(bucket => ({
         label: bucket.label,
         fullLabel: bucket.fullLabel,
-        value: bucket.reach,
-        detail: `reach across ${bucket.posts} ${bucket.posts === 1 ? "post" : "posts"}`,
-        highlight: peak > 0 && bucket.reach === peak,
+        value: bucket[metric],
+        detail: `${metric} across ${bucket.posts} ${bucket.posts === 1 ? "post" : "posts"}`,
+        highlight: peak > 0 && bucket[metric] === peak,
       }))} />
     </div>
   );
 }
 
-function HighestReachPosts({ publishing }) {
-  const hasReachData = publishing.weekdays.some(bucket => bucket.posts > 0);
+function PublishingPerformance({ publishing, metric = "reach" }) {
+  const reach = metric === "reach";
+  const titleId = reach ? "highest-reach-posts" : "highest-viewed-videos";
+  const hasData = publishing.weekdays.some(bucket => bucket.posts > 0);
   const hourLabel = (hour) => String(hour).padStart(2, "0");
   const windows = publishing.windows.map(bucket => ({
     ...bucket,
@@ -373,23 +386,79 @@ function HighestReachPosts({ publishing }) {
     fullLabel: `${hourLabel(bucket.startHour)}:00–${hourLabel(bucket.endHour)}:00`,
   }));
   return (
-    <section className={`${panel} @container`} aria-labelledby="highest-reach-posts">
-      <h2 id="highest-reach-posts" className="font-display text-xl font-semibold">Highest-reach posts</h2>
+    <section className={`${panel} @container`} aria-labelledby={titleId}>
+      <h2 id={titleId} className="font-display text-xl font-semibold">{reach ? "Highest-reach posts" : "Highest-viewed videos"}</h2>
       <p className="mb-4 mt-1 text-xs text-base-content/75">
-        Lifetime post reach grouped by when posts were published (SGT). An account reached by multiple posts counts once per post.
+        {reach
+          ? "Lifetime post reach grouped by when posts were published (SGT). An account reached by multiple posts counts once per post."
+          : "Lifetime views on the latest 15 videos, grouped by when they were published (SGT)."}
       </p>
-      {hasReachData ? (
+      {hasData ? (
         <div className="grid gap-3 @xl:grid-cols-2">
-          <PublishingReachChart title="Total reach by publish day" buckets={publishing.weekdays} />
-          <PublishingReachChart title="Total reach by publish time" buckets={windows} />
+          <PublishingChart title={`Total ${metric} by publish day`} buckets={publishing.weekdays} metric={metric} />
+          <PublishingChart title={`Total ${metric} by publish time`} buckets={windows} metric={metric} />
         </div>
-      ) : <p className="rounded-xl bg-base-200/55 p-4 text-sm">Meta hasn’t returned any post reach figures.</p>}
+      ) : <p className="rounded-xl bg-base-200/55 p-4 text-sm">{reach ? "Meta hasn’t returned any post reach figures." : "No video view counts are available."}</p>}
     </section>
   );
 }
 
-function Analytics({ data, days, trendInterval, setTrendInterval }) {
-  const { username, followers, following, followerChange30Days, views, postCount, engagement, measuredPosts, weekly } = data;
+function AnalyticsStats({ platform, metrics }) {
+  return (
+    <div className="stats grid w-full grid-flow-row grid-cols-2 gap-3 overflow-visible xl:grid-cols-4" aria-label={`${platform} metrics`}>
+      {metrics.map(({ title, value, detail, icon: Icon, tone, loading }) => (
+        <div key={title} className={`stat flex flex-col gap-2 rounded-2xl bg-[var(--tone-bg)] px-4 py-4 sm:px-5 tone-${tone}`}>
+          <div className="flex items-start justify-between gap-2 text-sm font-medium">
+            <span>{title}</span><Icon size={17} className="mt-0.5 shrink-0 text-[var(--tone)]" aria-hidden="true" />
+          </div>
+          <div className="font-display text-3xl font-semibold tabular-nums">
+            {loading ? <span className="skeleton inline-block h-8 w-16" role="status" aria-label={`Loading ${title.toLowerCase()}`} />
+              : value == null ? <><span aria-hidden="true">—</span><span className="sr-only">Unavailable</span></> : typeof value === "number" ? numbers.format(value) : value}
+          </div>
+          <p className="text-xs leading-relaxed text-base-content/75">{detail}</p>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function AnalyticsSheet({ platform, icon: Icon, result, action = "Connect", onIntegrations, onRetry, controls, children }) {
+  const titleId = `${platform.toLowerCase()}-analytics-title`;
+  return (
+    <section id={`${platform.toLowerCase()}-analytics`} className="space-y-5" aria-labelledby={titleId} aria-busy={result.state === "loading"}>
+      <h2 id={titleId} className="flex items-center gap-2 font-display text-xl font-semibold">
+        <Icon size={17} aria-hidden="true" /> {platform} analytics
+      </h2>
+      {controls}
+      {result.state === "loading" ? (
+        <div className="grid grid-cols-2 gap-3 xl:grid-cols-4" role="status">
+          <span className="sr-only">Loading {platform} analytics</span>
+          {Array.from({ length: 4 }, (_, index) => <div key={index} className="skeleton h-28 rounded-2xl" aria-hidden="true" />)}
+        </div>
+      ) : result.state === "error" ? (
+        <div className="alert alert-warning">
+          <span>{result.message}</span>
+          <button type="button" className="btn btn-sm" onClick={onRetry}><RefreshCw size={15} /> Try again</button>
+        </div>
+      ) : result.analytics ? children : (
+        <div className={panel}>
+          <h3 className="font-display text-xl font-semibold">{result.configured ? action : "Set up"} {platform}</h3>
+          <p className="mb-4 mt-2 text-sm">{result.configured
+            ? `Open Integrations to ${action.toLowerCase()} ${platform} and view your analytics.`
+            : `${platform} needs server setup before you can view analytics.`}</p>
+          <button type="button" className="btn btn-primary btn-sm" onClick={onIntegrations}>Open Integrations</button>
+        </div>
+      )}
+    </section>
+  );
+}
+
+function Analytics({ data, content, onRetryContent, days, trendInterval, setTrendInterval }) {
+  const { username, followers, following, followerChange30Days, views } = data;
+  const details = content.analytics;
+  const loadingContent = content.state === "loading";
+  const { postCount, engagement, measuredPosts } = details ?? {};
+  const weekly = data.weekly.map((week) => ({ ...week, posts: details?.postsByWeek[week.start] }));
   const account = data.accountMetrics;
   const shorterAccountRange = account?.uniqueAccountDays < days;
   const rangeSuffix = shorterAccountRange ? ` (last ${account.uniqueAccountDays} days)` : "";
@@ -398,7 +467,8 @@ function Analytics({ data, days, trendInterval, setTrendInterval }) {
     {
       title: "Average engagement rate",
       value: engagement == null ? null : `${numbers.format(engagement)}%`,
-      detail: `Mean of per-post rates · ${measuredPosts} of ${postCount} posts measured`,
+      detail: details ? `Mean of per-post rates · ${measuredPosts} of ${postCount} posts measured` : "Mean of per-post rates",
+      loading: loadingContent,
       icon: Heart, tone: "blue",
     },
     {
@@ -406,11 +476,10 @@ function Analytics({ data, days, trendInterval, setTrendInterval }) {
       value: followerChange30Days == null ? null : `${followerChange30Days > 0 ? "+" : ""}${numbers.format(followerChange30Days)}`,
       detail: "Net change reported by Meta over the last 30 days", icon: Users, tone: "purple",
     },
-    { title: "Posts published", value: postCount, detail: "Feed posts and reels", icon: LayoutGrid, tone: "brown" },
+    { title: "Posts published", value: postCount, detail: "Feed posts and reels", icon: LayoutGrid, tone: "brown", loading: loadingContent },
   ];
   const fullWeeks = weekly.filter(({ start, end }) => Date.parse(end) - Date.parse(start) === 6 * 86_400_000);
   const activeWeeks = fullWeeks.filter((week) => week.posts > 0).length;
-  const consistency = Math.round(activeWeeks / fullWeeks.length * 100);
 
   return (
     <>
@@ -419,19 +488,7 @@ function Analytics({ data, days, trendInterval, setTrendInterval }) {
           <span className="min-w-0 wrap-anywhere">To show views, follower growth, and more post metrics, enable <code>instagram_manage_insights</code> in Meta Unified Login and update the server’s access token.</span>
         </div>
       )}
-      <div className="stats grid w-full grid-flow-row grid-cols-2 gap-3 overflow-visible xl:grid-cols-4" aria-label="Instagram metrics">
-        {metrics.map(({ title, value, detail, icon: Icon, tone }) => (
-          <div key={title} className={`stat flex flex-col gap-2 rounded-2xl bg-[var(--tone-bg)] px-4 py-4 sm:px-5 tone-${tone}`}>
-            <div className="flex items-start justify-between gap-2 text-sm font-medium">
-              <span>{title}</span><Icon size={17} className="mt-0.5 shrink-0 text-[var(--tone)]" aria-hidden="true" />
-            </div>
-            <div className="font-display text-3xl font-semibold tabular-nums">
-              {value == null ? <><span aria-hidden="true">—</span><span className="sr-only">Unavailable</span></> : typeof value === "number" ? numbers.format(value) : value}
-            </div>
-            <p className="text-xs leading-relaxed text-base-content/75">{detail}</p>
-          </div>
-        ))}
-      </div>
+      <AnalyticsStats platform="Instagram" metrics={metrics} />
       <section className={panel} aria-label="Account activity">
         <h2 className="font-display text-xl font-semibold">Account activity</h2>
         <p className="mb-4 mt-1 text-xs text-base-content/75">
@@ -449,42 +506,178 @@ function Analytics({ data, days, trendInterval, setTrendInterval }) {
         ]} />
       </section>
       <div className="grid grid-cols-1 items-start gap-4 xl:grid-cols-2">
-        <WeeklyTrends weekly={weekly} days={days} trendInterval={trendInterval} setTrendInterval={setTrendInterval} />
-        <HighestReachPosts publishing={data.reachByPublishingTime} />
-        <section className={panel}>
-          <h2 className="font-display text-xl font-semibold">Posting consistency</h2>
-          <p className="mb-3 mt-1 text-xs text-base-content/75">Full weeks with at least one post</p>
-          <p className="mb-2 font-display text-3xl font-semibold">{consistency}%</p>
-          <progress className="progress progress-secondary w-full" aria-label="Posting consistency" value={activeWeeks} max={fullWeeks.length} />
-          <p className="mt-1 text-sm">{activeWeeks} of {fullWeeks.length} weeks active</p>
-        </section>
-        <section className={panel}>
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <h2 className="font-display text-xl font-semibold">Audience today</h2>
-            {username && <span className="text-sm text-base-content/75">@{username}</span>}
+        <WeeklyTrends weekly={weekly} days={days} trendInterval={trendInterval} setTrendInterval={setTrendInterval} postsLoading={loadingContent} />
+        {details ? <PublishingPerformance publishing={details.reachByPublishingTime} /> : loadingContent ? (
+          <div className={panel} role="status">
+            <span className="loading loading-spinner loading-sm mr-2 align-middle" aria-hidden="true" />
+            <span className="text-sm">Loading post and Story insights</span>
           </div>
-          <dl className="mt-4 grid grid-cols-2 gap-4">
-            <div><dt className="text-sm">Followers</dt><dd className="mt-1 font-display text-2xl font-semibold">{followers == null ? "Unavailable" : numbers.format(followers)}</dd></div>
-            <div><dt className="text-sm">Following</dt><dd className="mt-1 font-display text-2xl font-semibold">{following == null ? "Unavailable" : numbers.format(following)}</dd></div>
-          </dl>
-        </section>
+        ) : (
+          <div className="alert alert-warning">
+            <span>{content.message || "Instagram post and Story insights are unavailable."}</span>
+            <button type="button" className="btn btn-sm" onClick={onRetryContent}>Retry post insights</button>
+          </div>
+        )}
+        {details && <PostingConsistency activeWeeks={activeWeeks} totalWeeks={fullWeeks.length} detail="Full weeks with at least one post" />}
+        <AudienceToday name={username && `@${username}`} followers={followers} following={following} />
       </div>
       <AudienceDemographics groups={data.demographics || {}} />
-      <FeaturedPosts posts={data.featuredPosts} />
-      <Stories items={data.stories} />
+      {details && <FeaturedPosts posts={details.featuredPosts} />}
+      {details && <Stories items={details.stories} />}
+    </>
+  );
+}
+
+function PostingConsistency({ activeWeeks, totalWeeks, detail }) {
+  return (
+    <section className={panel}>
+      <h2 className="font-display text-xl font-semibold">Posting consistency</h2>
+      <p className="mb-3 mt-1 text-xs text-base-content/75">{detail}</p>
+      {totalWeeks > 0 ? (
+        <>
+          <p className="mb-2 font-display text-3xl font-semibold">{Math.round(activeWeeks / totalWeeks * 100)}%</p>
+          <progress className="progress progress-secondary w-full" aria-label="Posting consistency" value={activeWeeks} max={totalWeeks} />
+          <p className="mt-1 text-sm">{activeWeeks} of {totalWeeks} weeks active</p>
+        </>
+      ) : <p className="text-sm">No weeks in this period.</p>}
+    </section>
+  );
+}
+
+function AudienceToday({ name, followers, following }) {
+  return (
+    <section className={panel}>
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <h2 className="font-display text-xl font-semibold">Audience today</h2>
+        {name && <span className="text-sm text-base-content/75">{name}</span>}
+      </div>
+      <dl className="mt-4 grid grid-cols-2 gap-4">
+        {[["Followers", followers], ["Following", following]].map(([label, value]) => (
+          <div key={label}><dt className="text-sm">{label}</dt><dd className="mt-1 font-display text-2xl font-semibold">{value == null ? "Unavailable" : numbers.format(value)}</dd></div>
+        ))}
+      </dl>
+    </section>
+  );
+}
+
+function TikTokTrends({ posts }) {
+  const [metric, setMetric] = useState("engagements");
+  const [interval, setInterval] = useState("weekly");
+  const daily = interval === "daily";
+  const choices = [["engagements", "Lifetime engagements"], ["views", "Lifetime views"], ["posts", "Posts published"]];
+  const label = choices.find(([key]) => key === metric)[1];
+  const grouped = new Map();
+  for (const post of posts) {
+    const start = daily ? post.publishedDay : post.publishedWeek;
+    const value = metric === "engagements" ? post.engagements : metric === "views" ? post.metrics.views : 1;
+    if (!grouped.has(start)) grouped.set(start, null);
+    if (value != null) grouped.set(start, (grouped.get(start) ?? 0) + value);
+  }
+  const values = [...grouped.entries()].sort(([a], [b]) => a - b).map(([start, value]) => ({
+    label: formatDate(start), fullLabel: daily ? postDates.format(start) : `${formatDate(start)} – ${postDates.format(start + 6 * dayMs)}`,
+    value, detail: metric === "engagements" ? "engagements" : metric,
+  }));
+  const period = daily ? "day" : "week";
+  const title = `${label} by ${metric === "posts" ? period : `publish ${period}`}`;
+  return (
+    <section className={panel}>
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
+        <h2 className="font-display text-xl font-semibold">{title}</h2>
+        <select className="select select-sm w-auto" aria-label="TikTok trend metric" value={metric} onChange={(event) => setMetric(event.target.value)}>
+          {choices.map(([key, name]) => <option key={key} value={key}>{name}</option>)}
+        </select>
+      </div>
+      <div className="join mb-3" role="group" aria-label={`${label} interval`}>
+        {[["daily", "Daily"], ["weekly", "Weekly"]].map(([key, name]) => (
+          <button key={key} type="button" className={`btn btn-sm join-item ${interval === key ? "btn-primary" : ""}`}
+            aria-pressed={interval === key} onClick={() => setInterval(key)}>{name}</button>
+        ))}
+      </div>
+      <p className="mb-4 text-xs text-base-content/75">Each video’s total is counted on its publish date (SGT). Covers the latest 15 public videos.</p>
+      {values.some(({ value }) => value != null) ? (
+        <div className="relative overflow-x-auto pb-1" tabIndex={0} aria-label={title}>
+          <div style={{ minWidth: values.length * 54 }}><TrendChart values={values} /></div>
+        </div>
+      ) : <p className="rounded-xl bg-base-200/55 p-4 text-sm">{label} data is unavailable for these videos.</p>}
+    </section>
+  );
+}
+
+const dayMs = 86_400_000;
+const singaporeOffset = 8 * 3_600_000;
+const sumAvailable = (values) => values.some(value => value != null)
+  ? values.reduce((total, value) => total + (value ?? 0), 0) : null;
+
+function TikTokAnalytics({ data: { account, posts } }) {
+  const weekdays = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].map(label => ({ label, views: 0, posts: 0 }));
+  const windows = Array.from({ length: 6 }, (_, index) => ({ startHour: index * 4, endHour: (index + 1) * 4, views: 0, posts: 0 }));
+  const recent = posts.map(post => {
+    const localDate = new Date(Date.parse(post.date) + singaporeOffset);
+    const publishedDay = Math.floor(localDate.getTime() / dayMs) * dayMs;
+    const weekday = (localDate.getUTCDay() + 6) % 7;
+    const counts = [post.metrics.likes, post.metrics.comments, post.metrics.shares];
+    if (post.metrics.views != null) {
+      for (const bucket of [weekdays[weekday], windows[Math.floor(localDate.getUTCHours() / 4)]]) {
+        bucket.views += post.metrics.views;
+        bucket.posts += 1;
+      }
+    }
+    return {
+      ...post, publishedDay, publishedWeek: publishedDay - weekday * dayMs,
+      engagements: counts.every(value => value != null) ? sumAvailable(counts) : null,
+    };
+  }).sort((a, b) => b.publishedDay - a.publishedDay || Date.parse(b.date) - Date.parse(a.date));
+  const top = recent.filter(post => post.engagements != null).sort((a, b) => b.engagements - a.engagements);
+  const activeWeeks = new Set(recent.map(post => post.publishedWeek)).size;
+  const totalWeeks = recent.length ? (recent[0].publishedWeek - recent.at(-1).publishedWeek) / (7 * dayMs) + 1 : 0;
+  const metrics = [
+    { title: "Views", value: sumAvailable(recent.map(post => post.metrics.views)), detail: "Lifetime views on recent videos", icon: Eye, tone: "pink" },
+    { title: "Average engagements", value: mean(top.map(post => post.engagements)), detail: `Likes, comments and shares per video · ${top.length} measured`, icon: Heart, tone: "blue" },
+    { title: "Followers", value: account.followers, detail: "Accounts following you today", icon: Users, tone: "purple" },
+    { title: "Public videos", value: account.posts, detail: "All public videos on your account", icon: LayoutGrid, tone: "brown" },
+  ];
+  return (
+    <>
+      <AnalyticsStats platform="TikTok" metrics={metrics} />
+      <section className={panel} aria-label="Account activity">
+        <h2 className="font-display text-xl font-semibold">Account activity</h2>
+        <p className="mb-4 mt-1 text-xs text-base-content/75">Lifetime metrics for your latest 15 public videos, plus account likes</p>
+        <MetricList entries={[
+          ["Total engagements", sumAvailable(top.map(post => post.engagements)), "The sum of likes, comments and shares for videos with all three counts."],
+          ["Likes", sumAvailable(recent.map(post => post.metrics.likes)), "Likes on the recent videos."],
+          ["Comments", sumAvailable(recent.map(post => post.metrics.comments)), "Comments on the recent videos."],
+          ["Shares", sumAvailable(recent.map(post => post.metrics.shares)), "Times the recent videos were shared."],
+          ["Account likes", account.likes, "Likes received across the account."],
+        ]} />
+      </section>
+      <div className="grid grid-cols-1 items-start gap-4 xl:grid-cols-2">
+        <TikTokTrends posts={recent} />
+        <PublishingPerformance publishing={{ weekdays, windows }} metric="views" />
+        <PostingConsistency activeWeeks={activeWeeks} totalWeeks={totalWeeks} detail="Weeks with a video, from the earliest to the latest video shown" />
+        <AudienceToday name={account.username} followers={account.followers} following={account.following} />
+      </div>
+      <FeaturedPosts posts={{ top, recent }} platform="TikTok" />
     </>
   );
 }
 
 export default function InstagramOverview({ greeting, onIntegrations }) {
-  const [days, setDays] = useState(30);
+  const [sheet, setSheet] = useState(() =>
+    new URLSearchParams(window.location.search).get("analytics") === "tiktok" ? "tiktok" : "instagram",
+  );
+  const [{ days, until }, setRange] = useState(() => ({ days: 30, until: new Date().toISOString().slice(0, 10) }));
   const [trendInterval, setTrendInterval] = useState("weekly");
   const [attempt, setAttempt] = useState(0);
   const [result, setResult] = useState({ state: "loading" });
+  const [contentAttempt, setContentAttempt] = useState(0);
+  const [content, setContent] = useState({ state: "loading" });
+  const [tiktokAttempt, setTikTokAttempt] = useState(0);
+  const [tiktok, setTikTok] = useState({ state: "loading" });
 
   useEffect(() => {
+    if (sheet !== "instagram") return;
     const controller = new AbortController();
-    api(`/meta/analytics?days=${days}`, { signal: controller.signal })
+    api(`/meta/analytics?days=${days}&until=${until}&section=account`, { signal: controller.signal })
       .then((data) => {
         if (!controller.signal.aborted) setResult({ state: "ready", ...data });
       })
@@ -492,16 +685,63 @@ export default function InstagramOverview({ greeting, onIntegrations }) {
         if (!controller.signal.aborted) setResult({ state: "error", message: error.message });
       });
     return () => controller.abort();
-  }, [days, attempt]);
+  }, [sheet, days, until, attempt]);
+
+  useEffect(() => {
+    if (sheet !== "instagram") return;
+    const controller = new AbortController();
+    api(`/meta/analytics?days=${days}&until=${until}&section=content`, { signal: controller.signal })
+      .then((data) => {
+        if (!controller.signal.aborted) setContent({ state: "ready", ...data });
+      })
+      .catch((error) => {
+        if (!controller.signal.aborted) setContent({ state: "error", message: error.message });
+      });
+    return () => controller.abort();
+  }, [sheet, days, until, contentAttempt]);
+
+  useEffect(() => {
+    if (sheet !== "tiktok") return;
+    const controller = new AbortController();
+    api("/tiktok/analytics", { signal: controller.signal })
+      .then((data) => {
+        if (!controller.signal.aborted) setTikTok({ state: "ready", ...data });
+      })
+      .catch((error) => {
+        if (!controller.signal.aborted) setTikTok({ state: "error", message: error.message });
+      });
+    return () => controller.abort();
+  }, [sheet, tiktokAttempt]);
+
+  const selectSheet = (platform) => {
+    setSheet(platform);
+    const url = new URL(window.location.href);
+    if (platform === "tiktok") url.searchParams.set("analytics", platform);
+    else url.searchParams.delete("analytics");
+    window.history.replaceState(null, "", url);
+  };
+  const selectSheetWithKey = (event) => {
+    if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+    event.preventDefault();
+    const next = event.key === "Home" ? "instagram" : event.key === "End" ? "tiktok"
+      : sheet === "instagram" ? "tiktok" : "instagram";
+    selectSheet(next);
+    document.getElementById(`analytics-tab-${next}`)?.focus();
+  };
 
   const selectDays = (next) => {
     if (next === days) return;
-    setResult({ state: "loading" });
-    setDays(next);
+    setResult((previous) => ({ ...previous, state: "loading" }));
+    setContent({ state: "loading" });
+    setRange({ days: next, until: new Date().toISOString().slice(0, 10) });
   };
   const retry = () => {
     setResult({ state: "loading" });
     setAttempt((value) => value + 1);
+  };
+  const retryContent = () => {
+    setContent({ state: "loading" });
+    setContentAttempt((value) => value + 1);
   };
 
   return (
@@ -511,45 +751,54 @@ export default function InstagramOverview({ greeting, onIntegrations }) {
           <span>Good {greeting} Yandy</span>
           <img src={overviewCat} alt="" width="96" height="96" className="size-16 shrink-0 object-contain sm:size-24" />
         </h1>
+        <p className="mt-2 text-sm leading-relaxed text-base-content/75">
+          Open <strong>Integrations</strong> to connect your accounts, then choose Instagram or TikTok to see your analytics.
+        </p>
       </header>
-      <section id="instagram-analytics" className="space-y-5" aria-labelledby="instagram-analytics-title" aria-busy={result.state === "loading"}>
-        <h2 id="instagram-analytics-title" className="flex items-center gap-2 font-display text-xl font-semibold"><Instagram size={17} aria-hidden="true" /> Instagram analytics</h2>
-        <div className="flex flex-wrap items-center gap-3">
-          <div className="join" role="group" aria-label="Analytics date range">
-            {[7, 30, 90].map((range) => (
-              <button key={range} className={`btn btn-sm join-item ${days === range ? "btn-primary" : ""}`} aria-pressed={days === range} onClick={() => selectDays(range)}>
-                {range} days
-              </button>
-            ))}
-          </div>
-          {result.analytics && (
-            <span className="flex items-center gap-2 text-xs text-base-content/75">
-              <CalendarDays size={15} aria-hidden="true" /> {formatDate(result.analytics.start)} – {formatDate(result.analytics.end)} UTC
-            </span>
-          )}
-        </div>
-        {result.state === "loading" && (
-          <div className="grid grid-cols-2 gap-3 xl:grid-cols-4" role="status">
-            <span className="sr-only">Loading Instagram analytics</span>
-            {Array.from({ length: 4 }, (_, index) => <div key={index} className="skeleton h-28 rounded-2xl" aria-hidden="true" />)}
-          </div>
-        )}
-        {result.state === "error" && (
-          <div className="alert alert-warning">
-            <span>{result.message}</span>
-            <button className="btn btn-sm" onClick={retry}><RefreshCw size={15} /> Try again</button>
-          </div>
-        )}
-        {result.state === "ready" && (result.analytics ? (
-          <Analytics data={result.analytics} days={days} trendInterval={trendInterval} setTrendInterval={setTrendInterval} />
-        ) : (
-          <div className={panel}>
-            <h2 className="font-display text-xl font-semibold">{result.configured ? "Unlock Instagram" : "Connect Instagram"}</h2>
-            <p className="mb-4 mt-2 text-sm">Open Integrations to view analytics for the connected Instagram account.</p>
-            <button className="btn btn-primary btn-sm" onClick={onIntegrations}>Open Integrations</button>
-          </div>
+      <div className="tabs tabs-box w-fit bg-base-100" role="tablist" aria-label="Analytics platform">
+        {[["instagram", "Instagram", Instagram], ["tiktok", "TikTok", Music2]].map(([platform, label, Icon]) => (
+          <button key={platform} id={`analytics-tab-${platform}`} role="tab" type="button"
+            className={`tab gap-2 ${sheet === platform ? "tab-active" : ""}`}
+            aria-selected={sheet === platform} aria-controls={`analytics-sheet-${platform}`}
+            tabIndex={sheet === platform ? 0 : -1} onClick={() => selectSheet(platform)} onKeyDown={selectSheetWithKey}>
+            <Icon size={16} aria-hidden="true" /> {label}
+          </button>
         ))}
-      </section>
+      </div>
+      <div id="analytics-sheet-instagram" role="tabpanel" aria-labelledby="analytics-tab-instagram" hidden={sheet !== "instagram"}>
+        {sheet === "instagram" && (
+          <AnalyticsSheet platform="Instagram" icon={Instagram} result={result} action="Unlock"
+            onIntegrations={onIntegrations} onRetry={retry}
+            controls={result.analytics && (
+              <div className="flex flex-wrap items-center gap-3">
+                <div className="join" role="group" aria-label="Analytics date range">
+                  {[7, 30, 90].map((range) => (
+                    <button type="button" key={range} className={`btn btn-sm join-item ${days === range ? "btn-primary" : ""}`}
+                      aria-pressed={days === range} onClick={() => selectDays(range)}>{range} days</button>
+                  ))}
+                </div>
+                {result.state === "ready" && (
+                  <span className="flex items-center gap-2 text-xs text-base-content/75">
+                    <CalendarDays size={15} aria-hidden="true" /> {formatDate(result.analytics.start)} – {formatDate(result.analytics.end)} UTC
+                  </span>
+                )}
+              </div>
+            )}>
+            {result.analytics && <Analytics data={result.analytics} content={content} onRetryContent={retryContent}
+              days={days} trendInterval={trendInterval} setTrendInterval={setTrendInterval} />}
+          </AnalyticsSheet>
+        )}
+      </div>
+      <div id="analytics-sheet-tiktok" role="tabpanel" aria-labelledby="analytics-tab-tiktok" hidden={sheet !== "tiktok"}>
+        {sheet === "tiktok" && (
+          <AnalyticsSheet platform="TikTok" icon={Music2} result={tiktok} onIntegrations={onIntegrations} onRetry={() => {
+            setTikTok({ state: "loading" });
+            setTikTokAttempt((value) => value + 1);
+          }}>
+            {tiktok.analytics && <TikTokAnalytics data={tiktok.analytics} />}
+          </AnalyticsSheet>
+        )}
+      </div>
     </section>
   );
 }

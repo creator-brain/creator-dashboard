@@ -394,36 +394,36 @@ function reachByPublishingTime(posts) {
   return { weekdays, windows }
 }
 
-export async function instagramAnalytics(session, days) {
-  const until = Math.floor(Date.now() / dayMs) * dayMs
+function analyticsPeriod(days, untilDate) {
+  const until = untilDate ? Date.parse(untilDate) : Math.floor(Date.now() / dayMs) * dayMs
   const since = until - days * dayMs
-  const uniqueAccountDays = Math.min(days, 30)
-  const weeks = analyticsRanges(since, until, 7)
+  return { since, until, weeks: analyticsRanges(since, until, 7) }
+}
+
+function analyticsAccountQueries(session, weeks) {
   const viewsFor = range => accountInsights(session, `views,total_interactions,reach,accounts_engaged,profile_links_taps,${engagementMetrics.join(',')}`, range)
   const growthFor = range => accountInsights(session, 'follows_and_unfollows', range, 'follow_type')
-  const [profile, media, latestViews, latestGrowth] = await Promise.all([
+  return { viewsFor, growthFor, latest: Promise.all([viewsFor(weeks.at(-1)), growthFor(weeks.at(-1))]) }
+}
+
+async function accountAnalytics(session, days, { since, until, weeks }, { viewsFor, growthFor, latest }) {
+  const uniqueAccountDays = Math.min(days, 30)
+  const [profile, [latestViews, latestGrowth]] = await Promise.all([
     graphRequest(`/${session.account.id}`, { fields: 'username,followers_count,follows_count,media_count' }, session.token),
-    analyticsMedia(session),
-    viewsFor(weeks.at(-1)),
-    growthFor(weeks.at(-1)),
+    latest,
   ])
   const denied = latestViews.permissionDenied && latestGrowth.permissionDenied
   const empty = { metrics: new Map() }
   const earlierWeeks = weeks.slice(0, -1)
-  const [earlierViews, earlierGrowth, monthlyGrowth, postPerformance, period, demographics, stories] = await Promise.all([
+  const [earlierViews, earlierGrowth, monthlyGrowth, period, demographics] = await Promise.all([
     latestViews.permissionDenied ? earlierWeeks.map(() => empty) : Promise.all(earlierWeeks.map(viewsFor)),
     latestGrowth.permissionDenied ? earlierWeeks.map(() => empty) : Promise.all(earlierWeeks.map(growthFor)),
     latestGrowth.permissionDenied ? empty : growthFor({ since: until - 30 * dayMs, until }),
-    analyticsPosts(session, media, denied),
     denied ? empty : weeks.length === 1 ? latestViews : accountInsights(session, 'reach,accounts_engaged', {
       since: until - uniqueAccountDays * dayMs, until,
     }),
     denied ? {} : audienceDemographics(session),
-    analyticsStories(session, denied),
   ])
-  const { measured: measuredMedia, ...featuredPosts } = postPerformance
-  const postsWithReach = measuredMedia.filter(post => post.reach !== null)
-  const posts = measuredMedia.filter(({ time }) => time >= since && time < until)
   const viewResults = [...earlierViews, latestViews]
   const growthResults = [...earlierGrowth, latestGrowth]
   const weekly = weeks.map(({ since: start, until: end }, index) => {
@@ -438,22 +438,18 @@ export async function instagramAnalytics(session, days) {
       accountsEngaged: metricValue(metrics.get('accounts_engaged')),
       profileLinkTaps: metricValue(metrics.get('profile_links_taps')),
       follows: growth?.follows ?? null, unfollows: growth?.unfollows ?? null, netFollowers: growth?.net ?? null,
-      posts: posts.filter(({ time }) => time >= start && time < end).length,
     }
   })
   const weeklyTotal = key => weekly.every(week => week[key] !== null) ? sum(weekly.map(week => week[key])) : null
-  const followers = count(profile.followers_count) ? profile.followers_count : null
-  const measured = posts.filter(post => post.engagementRate !== null)
+  const account = creatorAccount('instagram', { username: profile.username, followers: profile.followers_count, following: profile.follows_count, posts: profile.media_count })
   return {
-    account: creatorAccount('instagram', { username: profile.username, followers, following: profile.follows_count, posts: profile.media_count }),
+    account,
     username: profile.username || '',
-    followers,
+    followers: count(profile.followers_count) ? profile.followers_count : null,
     following: count(profile.follows_count) ? profile.follows_count : null,
     start: dateKey(since),
     end: dateKey(until - dayMs),
     views: weeklyTotal('views'),
-    engagement: measured.length ? sum(measured.map(post => post.engagementRate)) / measured.length : null,
-    measuredPosts: measured.length,
     netFollowers: weeklyTotal('netFollowers'),
     followerChange30Days: followerChange(monthlyGrowth.metrics.get('follows_and_unfollows'))?.net ?? null,
     accountMetrics: {
@@ -464,13 +460,44 @@ export async function instagramAnalytics(session, days) {
       interactions: weeklyTotal('interactions'), follows: weeklyTotal('follows'), unfollows: weeklyTotal('unfollows'),
     },
     demographics,
-    stories,
-    postCount: posts.length,
-    featuredPosts,
-    reachByPublishingTime: reachByPublishingTime(postsWithReach),
     insightsPermissionDenied: [...viewResults, ...growthResults].some(result => result.permissionDenied),
     weekly,
   }
+}
+
+async function contentAnalytics(session, { since, until, weeks }, { latest }) {
+  const [media, [latestViews, latestGrowth]] = await Promise.all([analyticsMedia(session), latest])
+  const denied = latestViews.permissionDenied && latestGrowth.permissionDenied
+  const [{ measured: measuredMedia, ...featuredPosts }, stories] = await Promise.all([
+    analyticsPosts(session, media, denied),
+    analyticsStories(session, denied),
+  ])
+  const posts = measuredMedia.filter(({ time }) => time >= since && time < until)
+  const measured = posts.filter(post => post.engagementRate !== null)
+  const postsByWeek = Object.fromEntries(weeks.map(({ since: start, until: end }) => [
+    dateKey(start), posts.filter(({ time }) => time >= start && time < end).length,
+  ]))
+  return {
+    engagement: measured.length ? sum(measured.map(post => post.engagementRate)) / measured.length : null,
+    measuredPosts: measured.length,
+    postCount: posts.length,
+    featuredPosts,
+    reachByPublishingTime: reachByPublishingTime(measuredMedia.filter(post => post.reach !== null)),
+    stories,
+    postsByWeek,
+  }
+}
+
+export async function instagramAnalytics(session, days, section, untilDate) {
+  const period = analyticsPeriod(days, untilDate)
+  const queries = analyticsAccountQueries(session, period.weeks)
+  if (section === 'account') return accountAnalytics(session, days, period, queries)
+  if (section === 'content') return contentAnalytics(session, period, queries)
+  const [account, { postsByWeek, ...content }] = await Promise.all([
+    accountAnalytics(session, days, period, queries),
+    contentAnalytics(session, period, queries),
+  ])
+  return { ...account, ...content, weekly: account.weekly.map(week => ({ ...week, posts: postsByWeek[week.start] })) }
 }
 
 const counterpart = (conversation, accountId) => conversation.participants?.data?.find(person => person.id !== accountId)?.username || ''
@@ -489,13 +516,51 @@ export async function instagramConversations(session, after) {
 
 async function loadConversation(session, id, includeMessages) {
   if (!validConversationId(id)) throw failure('Invalid Instagram conversation ID.', 400)
-  const row = await graphRequest(`/${encodeURIComponent(id)}`, {
-    fields: `id,updated_time,participants${includeMessages ? `,messages.limit(${INSTAGRAM_MESSAGE_LIMIT}){id,created_time,from,message}` : ''}`,
-  }, session.token)
+  const path = `/${encodeURIComponent(id)}`
+  const baseFields = 'id,updated_time,participants'
+  const messageFields = `${baseFields},messages.limit(${INSTAGRAM_MESSAGE_LIMIT})`
+  const row = includeMessages
+    ? await graphRequest(path, {
+      fields: `${messageFields}{id,created_time,from,message,attachments,shares{id,name,type,url},story,is_unsupported}`,
+    }, session.token).catch(error => {
+      if (error.metaCode !== 100) throw error
+      return graphRequest(path, { fields: `${messageFields}{id,created_time,from,message}` }, session.token)
+    })
+    : await graphRequest(path, { fields: baseFields }, session.token)
   if (!row.participants?.data?.some(person => person.id === session.account.id)) {
     throw failure('This Instagram conversation is outside the connected account.', 403)
   }
   return row
+}
+
+function instagramMessageMedia(message) {
+  const media = new Map()
+  function add(value, type, name) {
+    const url = httpsUrl(value)
+    if (!url || media.has(url)) return
+    const host = new URL(url).hostname
+    const cdn = ['cdninstagram.com', 'fbcdn.net', 'fbsbx.com'].some(domain => host === domain || host.endsWith('.' + domain))
+    media.set(url, {
+      url, type, name: typeof name === 'string' ? name.slice(0, 150) : '',
+      preview: cdn && (type === 'image' || type === 'video'),
+    })
+  }
+  for (const part of message.attachments?.data || []) {
+    const image = part.image_data
+    const video = part.video_data
+    add(image?.animated_gif_url || image?.url || image?.preview_url, 'image', part.name)
+    add(typeof video === 'string' ? video : video?.url, 'video', part.name)
+    if (part.file_url) {
+      const fileUrl = httpsUrl(part.file_url)
+      const isPdf = fileUrl && (/\.pdf$/i.test(part.name || '') || /\.pdf$/i.test(new URL(fileUrl).pathname))
+      add(fileUrl, isPdf ? 'pdf' : 'file', part.name)
+    }
+  }
+  for (const share of message.shares?.data || []) add(share.url, 'share', share.name)
+  for (const story of [message.story?.reply_to, message.story?.mention, message.story]) {
+    add(story?.link, 'story', '')
+  }
+  return [...media.values()]
 }
 
 function replyParticipant(row, accountId) {
@@ -510,6 +575,7 @@ export async function instagramConversation(session, id, { includeMessages = tru
     messages: (row.messages?.data || []).map(message => ({
       id: message.id, date: message.created_time, sender: message.from?.username || '',
       outgoing: message.from?.id === session.account.id, text: message.message || '',
+      media: instagramMessageMedia(message), unsupported: message.is_unsupported === true,
     })).sort((a, b) => Date.parse(b.date) - Date.parse(a.date)).slice(0, INSTAGRAM_MESSAGE_LIMIT),
   }
 }

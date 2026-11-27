@@ -1,4 +1,6 @@
 import { createCipheriv, createDecipheriv, createHash, randomBytes, timingSafeEqual } from 'node:crypto'
+import { parseDocument } from 'htmlparser2'
+import { messageUrl } from '../src/messageLinks.js'
 
 const BASE = 'https://gmail.googleapis.com/gmail/v1/users/me'
 const SCOPES = [
@@ -140,18 +142,34 @@ export const gmailThreadUrl = id => `https://mail.google.com/mail/u/0/#all/${id}
 
 const header = (message, name) => message.payload?.headers?.find(item => item.name?.toLowerCase() === name.toLowerCase())?.value || ''
 const decode = value => value ? Buffer.from(value, 'base64url').toString('utf8') : ''
-function htmlText(value) {
-  return value.replace(/<div\b[^>]*class=["'][^"']*\bgmail_quote\b[^"']*["'][^>]*>[\s\S]*$/i, '')
-    .replace(/<(script|style)\b[^>]*>[\s\S]*?<\/\1\s*>/gi, '')
-    .replace(/<\s*(br|\/p|\/div|\/li|\/tr)\b[^>]*>/gi, '\n')
-    .replace(/<[^>]+>/g, '')
-    .replace(/&(#x[\da-f]+|#\d+|amp|lt|gt|quot|apos|nbsp);/gi, (_, entity) => {
-      if (entity[0] === '#') {
-        const code = entity[1]?.toLowerCase() === 'x' ? Number.parseInt(entity.slice(2), 16) : Number.parseInt(entity.slice(1), 10)
-        return code > 0 && code <= 0x10ffff ? String.fromCodePoint(code) : ''
-      }
-      return { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: ' ' }[entity.toLowerCase()]
-    }).replace(/\n{3,}/g, '\n\n').trim()
+function htmlMessage(value) {
+  let text = ''
+  let quoted = false
+  const anchors = []
+  function visit(node) {
+    if (quoted || ['script', 'style', 'head', 'title', 'template'].includes(node.name)) return
+    if (node.attribs?.class?.split(/\s+/).includes('gmail_quote') || node.attribs?.id?.toLowerCase() === 'divrplyfwdmsg') {
+      quoted = true
+      return
+    }
+    if (node.type === 'text') text += node.data.replace(/\r\n?/g, '\n')
+    const start = text.length
+    for (const child of node.children || []) visit(child)
+    if (node.name === 'a') {
+      const url = messageUrl(node.attribs?.href)
+      if (url) anchors.push({ start, url, label: text.slice(start).replace(/\s+/g, ' ').trim() || url })
+    }
+    if (['br', 'p', 'div', 'li', 'tr', 'hr'].includes(node.name)) text += '\n'
+  }
+  visit(parseDocument(value))
+  const current = currentMessageText(text)
+  const truncated = current !== text.trim()
+  const end = text.length - text.trimStart().length + current.length
+  const links = new Map()
+  for (const { start, url, label } of anchors) {
+    if ((!truncated || start < end) && !links.has(url)) links.set(url, { url, label })
+  }
+  return { body: current.replace(/\n{3,}/g, '\n\n'), links: [...links.values()] }
 }
 export function currentMessageText(value) {
   const lines = String(value || '').replace(/\r\n?/g, '\n').split('\n')
@@ -166,25 +184,56 @@ export function currentMessageText(value) {
   return (cut < 0 ? lines : lines.slice(0, cut)).join('\n').trim()
 }
 function bodyText(part, mime) {
+  if (part.filename || part.mimeType === 'message/rfc822') return ''
   if (part.mimeType === mime && part.body?.data) return decode(part.body.data)
   return (part.parts || []).map(child => bodyText(child, mime)).find(Boolean) || ''
 }
 
+export const GMAIL_ATTACHMENT_DOWNLOAD_LIMIT = 4 * 1024 * 1024
+
+export function gmailAttachmentParts(part = {}) {
+  const { filename, mimeType, body } = part
+  const disposition = part.headers?.find(({ name }) => name.toLowerCase() === 'content-disposition')?.value || ''
+  const isPdf = mimeType?.toLowerCase() === 'application/pdf' || /\.pdf$/i.test(filename || '')
+  if (body && (filename || isPdf || /^attachment\b/i.test(disposition)) &&
+    (!/^inline\b/i.test(disposition) || isPdf)) {
+    const fallback = isPdf ? 'Attachment.pdf' : 'Attachment'
+    const name = (filename || fallback).replace(/[\x00-\x1f\x7f/\\]/g, '_').trim().slice(0, 180) || fallback
+    return [{ name, body, mimeType: isPdf ? 'application/pdf' : mimeType || 'application/octet-stream' }]
+  }
+  if (mimeType === 'message/rfc822') return []
+  return (part.parts || []).flatMap(gmailAttachmentParts)
+}
+
+export const gmailPdfParts = part => gmailAttachmentParts(part).filter(file => file.mimeType === 'application/pdf')
+
 export function summarizeThread(thread, accountEmail) {
-  const messages = (thread.messages || []).map(message => ({
-    id: message.id,
-    from: header(message, 'From'),
-    to: header(message, 'To'),
-    subject: header(message, 'Subject'),
-    date: Number(message.internalDate) || 0,
-    sent: (message.labelIds || []).includes('SENT'),
-    outgoing: (message.labelIds || []).includes('SENT') || Boolean(accountEmail && address(header(message, 'From')).toLowerCase() === accountEmail.toLowerCase()),
-    draft: (message.labelIds || []).includes('DRAFT'),
-    body: currentMessageText(bodyText(message.payload || {}, 'text/plain') || htmlText(bodyText(message.payload || {}, 'text/html')) || message.snippet || ''),
-    messageId: header(message, 'Message-ID'),
-    references: header(message, 'References'),
-    replyTo: header(message, 'Reply-To'),
-  }))
+  const messages = (thread.messages || []).map(message => {
+    const html = htmlMessage(bodyText(message.payload || {}, 'text/html'))
+    const attachments = gmailAttachmentParts(message.payload).map(({ name, body, mimeType }, index) => {
+      const size = Number.isSafeInteger(body.size) && body.size >= 0 ? body.size : null
+      return { name, mimeType, index, size, downloadable: Boolean(body.attachmentId || body.data) && (size === null || size <= GMAIL_ATTACHMENT_DOWNLOAD_LIMIT) }
+    })
+    const pdfs = attachments.filter(file => file.mimeType === 'application/pdf')
+      .map(({ name, size, downloadable }, index) => ({ name, index, size, downloadable }))
+    return {
+      id: message.id,
+      from: header(message, 'From'),
+      to: header(message, 'To'),
+      subject: header(message, 'Subject'),
+      date: Number(message.internalDate) || 0,
+      sent: (message.labelIds || []).includes('SENT'),
+      outgoing: (message.labelIds || []).includes('SENT') || Boolean(accountEmail && address(header(message, 'From')).toLowerCase() === accountEmail.toLowerCase()),
+      draft: (message.labelIds || []).includes('DRAFT'),
+      body: currentMessageText(bodyText(message.payload || {}, 'text/plain') || html.body || message.snippet || ''),
+      links: html.links,
+      pdfs,
+      attachments,
+      messageId: header(message, 'Message-ID'),
+      references: header(message, 'References'),
+      replyTo: header(message, 'Reply-To'),
+    }
+  })
   return { id: thread.id, messages }
 }
 

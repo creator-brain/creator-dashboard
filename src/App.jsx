@@ -1,4 +1,7 @@
 import { IntegrationCard } from "./IntegrationCard.jsx";
+import { GmailAttachments, GmailLinks } from "./GmailAttachments.jsx";
+import { MessageText } from "./MessageText.jsx";
+import { TikTokIntegration } from "./TikTokIntegration.jsx";
 import collabCat from "./assets/collab-cat.png";
 import greetingCat from "./assets/greeting-cat.png";
 import sharkCat from "./assets/shark-cat.svg";
@@ -89,8 +92,19 @@ const statusColor = (status) =>
 const apiPath = (id) => `/deals/${encodeURIComponent(id)}`;
 
 function Filter({ label, values, counts, selected, onChange }) {
+  const dropdown = useRef(null);
+
+  useEffect(() => {
+    function closeOnOutsidePress(event) {
+      const menu = dropdown.current;
+      if (menu?.open && !menu.contains(event.target)) menu.open = false;
+    }
+    document.addEventListener("pointerdown", closeOnOutsidePress, true);
+    return () => document.removeEventListener("pointerdown", closeOnOutsidePress, true);
+  }, []);
+
   return (
-    <details className="dropdown">
+    <details ref={dropdown} className="dropdown">
       <summary
         className={`btn btn-sm rounded-full ${selected.length ? "btn-primary" : "btn-ghost border border-base-300"}`}
       >
@@ -1148,9 +1162,7 @@ function GmailPanel({ deal, onLinked }) {
                     </span>
                   </summary>
                   <p className="mt-1 opacity-60">To: {mail.to}</p>
-                  <p className="mt-2 whitespace-pre-wrap break-words leading-relaxed">
-                    {mail.body}
-                  </p>
+                  <MessageText text={mail.body} />
                 </details>
               ))}
             </div>
@@ -1159,6 +1171,8 @@ function GmailPanel({ deal, onLinked }) {
               No messages found in the linked thread.
             </p>
           )}
+          <GmailAttachments messages={thread?.messages || []} gmailUrl={`/api${apiPath(deal.id)}/gmail`} formatSize={formatSize} />
+          <GmailLinks messages={thread?.messages || []} />
           <div className="space-y-2 rounded-xl border border-base-300 p-3">
             <h4 className="text-sm font-semibold">Reply</h4>
             <div>
@@ -1358,6 +1372,7 @@ function IntegrationsDrawer({ onClose, onInstagramUnlocked, onInstagramLocked })
             error={error}
           />
           <InstagramIntegration onUnlocked={onInstagramUnlocked} onLocked={onInstagramLocked} />
+          <TikTokIntegration onDisconnected={onInstagramLocked} />
         </div>
       </aside>
     </>
@@ -1647,6 +1662,8 @@ function DealDrawer({
   );
 }
 
+const onOverview = () => window.location.hash !== "#deal-board";
+
 export default function App() {
   const [deals, setDeals] = useState([]);
   const updateLinkedDeal = useCallback((linked) => {
@@ -1656,7 +1673,7 @@ export default function App() {
   }, []);
   const [load, setLoad] = useState({ state: "loading", message: "", at: null });
   const [view, setView] = useState(initialView);
-  const [overview, setOverview] = useState(() => window.location.hash === "#overview");
+  const [overview, setOverview] = useState(onOverview);
   const [boardExpanded, setBoardExpanded] = useState(true);
   const [query, setQuery] = useState("");
   const [filters, setFilters] = useState({
@@ -1680,7 +1697,7 @@ export default function App() {
 
   useEffect(() => {
     function updatePage() {
-      setOverview(window.location.hash === "#overview");
+      setOverview(onOverview());
       setQuery("");
     }
     window.addEventListener("popstate", updatePage);
@@ -2004,21 +2021,39 @@ export default function App() {
   const loadingDeals = load.state === "loading";
   const activeDeal =
     drawer && drawer !== "log" ? deals.find((d) => d.id === drawer) : null;
-  const changeView = (patch) =>
-    setView((previous) => ({ ...previous, ...patch }));
-  const navigatePage = (nextOverview) => {
+  const changeView = useCallback((patch) =>
+    setView((previous) => ({ ...previous, ...patch })), []);
+  const navigatePage = useCallback((nextOverview) => {
     if (overview !== nextOverview) {
-      window.history.pushState(null, "", nextOverview ? "#overview" : window.location.pathname + window.location.search);
+      window.history.pushState(null, "", nextOverview ? "#overview" : "#deal-board");
       setOverview(nextOverview);
       window.scrollTo(0, 0);
     }
     setQuery("");
-  };
-  const chooseStage = (stage) => {
+  }, [overview]);
+  const chooseStage = useCallback((stage) => {
     navigatePage(false);
     changeView({ stage });
     setFilters((previous) => ({ ...previous, kpi: "" }));
-  };
+  }, [changeView, navigatePage]);
+  useEffect(() => {
+    function switchPage(event) {
+      if (event.defaultPrevented || event.isComposing || event.repeat || !event.metaKey || event.altKey || event.ctrlKey) return;
+      const digit = event.code === "Digit1" ? "1" : event.code === "Digit2" ? "2" : event.key;
+      if (digit !== "1" && digit !== "2") return;
+      event.preventDefault();
+      if (digit === "1") {
+        navigatePage(true);
+      } else {
+        setBoardExpanded(true);
+        chooseStage("");
+      }
+    }
+    window.addEventListener("keydown", switchPage);
+    return () => window.removeEventListener("keydown", switchPage);
+  }, [navigatePage, chooseStage]);
+  const toggleStage = (stage) =>
+    chooseStage(!overview && view.stage === stage ? "" : stage);
   const drop = (event, group) => {
     event.preventDefault();
     const id = event.dataTransfer.getData("text/plain") || dragId;
@@ -2046,7 +2081,7 @@ export default function App() {
         {view.sidebar && (
           <aside className="sidebar hidden w-64 shrink-0 flex-col overflow-y-auto px-4 py-6 lg:flex">
             <h1 className="mb-3 px-2">
-              <span className="sr-only">Yandy's creator dashboard</span>
+              <span className="sr-only">Content Creator Command Center</span>
               <img src={sharkCat} alt="" className="size-11 rounded-full" />
             </h1>
             <button
@@ -2056,12 +2091,13 @@ export default function App() {
               <Plug2 size={16} /> Integrations{" "}
               <ChevronRight size={15} className="ml-auto opacity-60" />
             </button>
-            <button className="sidebar-link mb-1" aria-current={overview ? "page" : undefined} onClick={() => navigatePage(true)}>
+            <button className="sidebar-link mb-1" aria-keyshortcuts="Meta+1 Meta+Shift+1" aria-current={overview ? "page" : undefined} onClick={() => navigatePage(true)}>
               <LayoutGrid size={16} /> Overview
             </button>
             <details className="collapse collapse-arrow" open={!overview && boardExpanded}>
               <summary
                 className="sidebar-link collapse-title min-h-0"
+                aria-keyshortcuts="Meta+2 Meta+Shift+2"
                 aria-current={!overview ? "page" : undefined}
                 onClick={(event) => {
                   event.preventDefault();
@@ -2086,7 +2122,8 @@ export default function App() {
                           <button
                             key={group.key}
                             className={`sidebar-stage ${!overview && view.stage === group.key ? "active" : ""}`}
-                            onClick={() => chooseStage(group.key)}
+                            aria-pressed={!overview && view.stage === group.key}
+                            onClick={() => toggleStage(group.key)}
                           >
                             <span
                               className={`tone-dot tone-${group.color}`}
@@ -2166,10 +2203,10 @@ export default function App() {
             </button>
           </header>
           <nav aria-label="Dashboard pages" className={`flex gap-2 border-b border-base-300 px-4 py-2 md:px-7 ${view.sidebar ? "lg:hidden" : ""}`}>
-            <button className={`btn btn-sm ${overview ? "btn-primary" : "btn-ghost"}`} aria-current={overview ? "page" : undefined} onClick={() => navigatePage(true)}>
+            <button className={`btn btn-sm ${overview ? "btn-primary" : "btn-ghost"}`} aria-keyshortcuts="Meta+1 Meta+Shift+1" aria-current={overview ? "page" : undefined} onClick={() => navigatePage(true)}>
               <LayoutGrid size={15} /> Overview
             </button>
-            <button className={`btn btn-sm ${!overview ? "btn-primary" : "btn-ghost"}`} aria-current={!overview ? "page" : undefined} onClick={() => chooseStage("")}>
+            <button className={`btn btn-sm ${!overview ? "btn-primary" : "btn-ghost"}`} aria-keyshortcuts="Meta+2 Meta+Shift+2" aria-current={!overview ? "page" : undefined} onClick={() => chooseStage("")}>
               <LayoutDashboard size={15} /> Deal board
               <span className="badge badge-xs" aria-label={`${boardCount} open deals`}>{boardCount}</span>
             </button>
@@ -2436,7 +2473,8 @@ export default function App() {
                     <button
                       key={group.key}
                       className={`tone-chip tone-${group.color} shrink-0 ${view.stage === group.key ? "ring-2 ring-primary" : ""}`}
-                      onClick={() => chooseStage(group.key)}
+                      aria-pressed={view.stage === group.key}
+                      onClick={() => toggleStage(group.key)}
                     >
                       {group.label || group.key}
                     </button>

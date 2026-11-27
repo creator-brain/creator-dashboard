@@ -1,17 +1,18 @@
 import express from 'express'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
+import { parseEnv } from 'node:util'
 import { DATA_SOURCE_ID, INSTAGRAM_CONVERSATION, instagramConversationId, instagramLinkHandle, notion, pageMarkdown, reconcileFollowUps, toDeal, unlinkedInstagramDeals, updateDeal } from './notion.js'
 import { normalizeInstagramHandle, sourceOf } from '../src/model.js'
 import { instagramAnalytics, instagramConfigured, instagramConversation, instagramConversations, instagramDailyMetric, instagramLock, instagramScorecard, instagramSession, instagramUnlock, sendInstagramReply, validConversationId } from './instagram.js'
-import { gmailAuthorize, gmailCallback, gmailConfigured, gmailConnected, gmailDisconnect, gmailRequest, gmailThreadUrl, makeMessage, replyDetails, summarizeThread, threadIdFromUrl } from './gmail.js'
+import { gmailAttachmentParts, gmailAuthorize, gmailCallback, gmailConfigured, gmailConnected, gmailDisconnect, gmailPdfParts, gmailRequest, gmailThreadUrl, GMAIL_ATTACHMENT_DOWNLOAD_LIMIT, makeMessage, replyDetails, summarizeThread, threadIdFromUrl } from './gmail.js'
 import { validWebhookSignature, webhookChallenge } from './metaWebhook.js'
+import { tiktokAnalytics, tiktokAuthorize, tiktokCallback, tiktokDisconnect, tiktokStatus } from './tiktok.js'
 
 try {
   const env = readFileSync(resolve('.env'), 'utf8')
-  for (const line of env.split(/\r?\n/)) {
-    const match = line.match(/^([A-Z_]+)=(.*)$/)
-    if (match && !process.env[match[1]]) process.env[match[1]] = match[2].replace(/^['"]|['"]$/g, '')
+  for (const [name, value] of Object.entries(parseEnv(env))) {
+    if (!process.env[name]) process.env[name] = value
   }
 } catch { /* Environment variables may already be supplied by the host. */ }
 
@@ -50,6 +51,11 @@ function sameSiteWrite(req, res, next) {
   } catch { res.status(403).json({ error: 'Request origin required.' }) }
 }
 app.post('/api/gmail/disconnect', sameSiteWrite, gmailDisconnect)
+app.get('/api/tiktok/status', (req, res) => res.json(tiktokStatus(req)))
+app.get('/api/tiktok/auth/start', tiktokAuthorize)
+app.get('/api/tiktok/auth/callback', tiktokCallback)
+app.post('/api/tiktok/disconnect', sameSiteWrite, tiktokDisconnect)
+app.get('/api/tiktok/analytics', async (req, res) => res.json(await tiktokAnalytics(req, res)))
 app.get('/api/meta/status', (req, res) => {
   res.json({ configured: instagramConfigured(), connected: Boolean(instagramSession(req)) })
 })
@@ -62,11 +68,16 @@ app.get('/api/meta/scorecard', async (req, res) => {
 })
 
 app.get('/api/meta/analytics', async (req, res) => {
-  const { days = '30' } = req.query
+  const { days = '30', section, until } = req.query
   if (!['7', '30', '90'].includes(days)) return res.status(400).json({ error: 'Choose 7, 30, or 90 days.' })
+  if (section !== undefined && !['account', 'content'].includes(section)) return res.status(400).json({ error: 'Choose account or content analytics.' })
+  if (until !== undefined && (typeof until !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(until) ||
+    !(Math.abs(Date.parse(until) - Math.floor(Date.now() / 86_400_000) * 86_400_000) <= 86_400_000))) {
+    return res.status(400).json({ error: 'Invalid Instagram analytics date.' })
+  }
   const configured = instagramConfigured()
   const session = instagramSession(req)
-  res.json({ configured, analytics: session ? await instagramAnalytics(session, Number(days)) : null })
+  res.json({ configured, analytics: session ? await instagramAnalytics(session, Number(days), section, until) : null })
 })
 
 function requireInstagramSession(req, res, next) {
@@ -173,6 +184,28 @@ app.get('/api/deals/:id/gmail', async (req, res, next) => {
     const thread = summarizeThread(data, profile.emailAddress)
     res.json({ thread, reply: replyDetails(thread, profile.emailAddress) })
   } catch (error) { next(error) }
+})
+app.get('/api/deals/:id/gmail/messages/:messageId/:kind/:index', async (req, res, next) => {
+  const { messageId, kind, index } = req.params
+  if (kind !== 'pdfs' && kind !== 'attachments') return next()
+  const getParts = kind === 'pdfs' ? gmailPdfParts : gmailAttachmentParts
+  if (!/^[\w-]{1,128}$/.test(messageId) || !/^\d{1,6}$/.test(index)) return res.status(400).json({ error: 'Invalid Gmail attachment.' })
+  if (!gmailConnected(req)) return res.status(401).json({ error: 'Connect Gmail to download this attachment.' })
+  const threadId = await linkedThread(req)
+  if (!threadId) return res.status(404).json({ error: 'No linked Gmail thread.' })
+  const path = `/messages/${encodeURIComponent(messageId)}`
+  const message = await gmailRequest(req, `${path}?format=full`)
+  const file = message.threadId === threadId ? getParts(message.payload)[Number(index)] : undefined
+  if (!file) return res.status(404).json({ error: 'Attachment not found on this Gmail thread.' })
+  if (file.body.size > GMAIL_ATTACHMENT_DOWNLOAD_LIMIT) return res.redirect(gmailThreadUrl(messageId))
+  const body = file.body.attachmentId
+    ? await gmailRequest(req, `${path}/attachments/${encodeURIComponent(file.body.attachmentId)}`) : file.body
+  if (typeof body.data !== 'string' || !body.data.length) return res.redirect(gmailThreadUrl(messageId))
+  if (body.data.length > Math.ceil(GMAIL_ATTACHMENT_DOWNLOAD_LIMIT / 3) * 4) return res.redirect(gmailThreadUrl(messageId))
+  const bytes = Buffer.from(body.data, 'base64url')
+  const isPdf = file.mimeType === 'application/pdf'
+  if (bytes.length > GMAIL_ATTACHMENT_DOWNLOAD_LIMIT || (isPdf && !bytes.subarray(0, 1024).includes('%PDF-'))) return res.redirect(gmailThreadUrl(messageId))
+  res.attachment(file.name).type(isPdf ? 'application/pdf' : 'application/octet-stream').set('X-Content-Type-Options', 'nosniff').send(bytes)
 })
 app.post('/api/deals/:id/gmail/link', sameSiteWrite, async (req, res, next) => {
   try {

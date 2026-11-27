@@ -53,3 +53,16 @@ For local testing, put the same client ID, secret and cookie key in `.env`, with
 5. The dashboard checks the connected inbox for Instagram deals with a handle and no saved conversation ID. It saves unique exact matches. Open a deal to view recent DMs. Use the conversation picker for deals that need manual linking.
 
 Open **Overview** for analytics from the same account. To enable views and follower growth, add `instagram_manage_insights` to your Meta Unified Login configuration and generate a replacement token with that permission alongside your existing scopes. Update `META_ACCESS_TOKEN` on the server, then unlock Instagram again. Posting activity and engagement use media available through the existing connection.
+
+## TikTok setup
+
+1. Add Login Kit for Web and Display API to your TikTok for Developers app. Enable `user.info.basic`, `user.info.stats`, and `video.list`.
+2. Register the HTTPS redirect URI `https://collab-pipeline.vercel.app/api/tiktok/auth/callback` in Login Kit for the production dashboard. Use your own HTTPS host with the same callback path for other environments.
+3. Set `TIKTOK_CLIENT_KEY`, `TIKTOK_CLIENT_SECRET`, `TIKTOK_REDIRECT_URI`, and `TIKTOK_COOKIE_KEY` on the server. Generate the cookie key with `node -e "console.log(require('node:crypto').randomBytes(32).toString('base64url'))"`.
+4. Open **Integrations → Connect TikTok**. After consent, the **TikTok** sheet in **Overview** shows account totals and lifetime counters for the latest 15 public videos. Select **Instagram** in Overview to switch platforms.
+
+For loopback testing, register `http://127.0.0.1:3001/api/tiktok/auth/callback` in the Sandbox's Desktop Login Kit settings. Set that as `TIKTOK_REDIRECT_URI` and set `TIKTOK_APP_ORIGIN=http://127.0.0.1:5173` in local `.env`, then restart the API. From the Vite dashboard on port 5173, **Connect TikTok** sends the browser directly to the backend on port 3001. The callback on port 3001 returns you to Overview on port 5173.
+
+For the OAuth and API requirements, see [TikTok Login Kit for Web](https://developers.tiktok.com/docs/en/login-kit-web) and [Display API](https://developers.tiktok.com/docs/en/display-api-get-started).
+
+**Webhook verification** uses a separate URL, `https://collab-pipeline.vercel.app/api/meta/webhook`, with the exact `META_WEBHOOK_VERIFY_TOKEN` value configured on the server. Reading linked conversations uses the Graph API on demand. Keep the messages webhook subscription off for now because background event processing has not been implemented.
