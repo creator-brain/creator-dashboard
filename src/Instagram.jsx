@@ -215,6 +215,7 @@ export function InstagramPanel({ deal, onLinked, onUnlocked }) {
       const result = await api(path, { signal })
       if (result.conversation || !result.contactHandle) {
         if (!signal.aborted) setConversation(result.conversation)
+        if (!signal.aborted && result.deal) onLinked(result.deal)
         return
       }
       setHandle(result.contactHandle)
@@ -229,7 +230,7 @@ export function InstagramPanel({ deal, onLinked, onUnlocked }) {
           if (!signal.aborted) {
             setConversation(saved.conversation)
             setLookupNotice('')
-            if (linked?.instagramLinked) onLinked(linked)
+            if (saved.deal || linked?.instagramLinked) onLinked(saved.deal || linked)
           }
           return
         }
@@ -291,7 +292,11 @@ export function InstagramPanel({ deal, onLinked, onUnlocked }) {
     })
   }
   function refresh() {
-    return run(async () => setConversation((await api(path)).conversation))
+    return run(async () => {
+      const result = await api(path)
+      setConversation(result.conversation)
+      if (result.deal) onLinked(result.deal)
+    })
   }
   async function sendReply(event) {
     event.preventDefault()

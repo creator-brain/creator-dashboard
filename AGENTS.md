@@ -42,6 +42,7 @@ Properties the app uses:
 | `Last Activity` | date | Board writes today's date on every edit |
 | `Last Edited` | last_edited_time | Read-only; drives "Last edited Xh ago" and "Gone quiet" |
 | `Gmail Thread` | url | Present ⇒ source = Email |
+| `Has` | multi_select | `Attachments`, `Links`. Written by the server when a deal's Gmail thread or Instagram chat loads (only when it changes, without touching Last Activity) and by the daily sync. Cards show a paperclip / link icon from it |
 | `Status 1` | status | Leftover from a page move; unused, safe to ignore |
 
 React board status order: Backlog, New - not replied, Action needed, Awaiting brand, Follow up - 14+ days | Ideas/Scripting, Filming, Editing, Draft sent/Scheduled | Completed - payment pending | Completed, Missed/Not Interested (Completed + Missed live in the sidebar **Archive**, not the main board). The legacy HTML source recognizes the new status, but the published Artifact needs republishing to pick up that change.

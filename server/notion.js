@@ -69,7 +69,20 @@ export function toDeal(page) {
     edited: property(page, 'Last Edited').last_edited_time || page.last_edited_time || '',
     gmail: property(page, 'Gmail Thread').url || '',
     instagramLinked: Boolean(instagramConversationId(page)),
+    has: multi(page, 'Has'),
   }
+}
+
+// 'Has' records whether a deal's conversation contains attachments and/or links, so cards can show icons
+// without re-reading every Gmail thread or Instagram chat.
+export function conversationHas({ attachments, links }) {
+  return [...(attachments ? ['Attachments'] : []), ...(links ? ['Links'] : [])]
+}
+
+// Saves 'Has' only when it changed. Returns the updated deal, or null when nothing was written or the write failed.
+export async function recordHas(deal, has) {
+  if ((deal.has || []).join() === has.join()) return null
+  try { return await updateDeal(deal.id, { prop: 'has', value: has }) } catch { return null }
 }
 
 async function* trackerPages(filter) {
@@ -153,6 +166,7 @@ export function updateProperties(change) {
     case 'gmail': properties['Gmail Thread'] = { url: change.value }; break
     case 'instagram': properties[INSTAGRAM_CONVERSATION] = { rich_text: change.value ? rich(change.value) : [] }; break
     case 'activity': properties['Last Activity'] = dateProperty({ start: change.value }); break
+    case 'has': properties.Has = { multi_select: (change.value || []).map(name => ({ name })) }; break
     default: throw Object.assign(new Error('Unsupported property'), { status: 400 })
   }
   return properties

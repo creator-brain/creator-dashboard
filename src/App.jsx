@@ -26,6 +26,7 @@ import {
   Inbox,
   LayoutDashboard,
   LayoutGrid,
+  Link2,
   Mail,
   Menu,
   Paperclip,
@@ -545,10 +546,22 @@ function DealCard({ deal, onOpen, onDrag }) {
         {deal.next || "Add a next step"}
       </p>
       <div className="mt-4 flex items-center justify-between gap-2 border-t border-base-200 pt-3 text-[11px] text-base-content/50">
-        <span
-          className={`tone-chip tone-${SOURCE_COLORS[deal.source] || "gray"}`}
-        >
-          {deal.source}
+        <span className="flex items-center gap-1.5">
+          <span
+            className={`tone-chip tone-${SOURCE_COLORS[deal.source] || "gray"}`}
+          >
+            {deal.source}
+          </span>
+          {deal.has?.includes("Attachments") && (
+            <Paperclip size={13} className="text-primary/70" role="img" aria-label="Has attachments">
+              <title>Has attachments</title>
+            </Paperclip>
+          )}
+          {deal.has?.includes("Links") && (
+            <Link2 size={13} className="text-primary/70" role="img" aria-label="Has links">
+              <title>Has links</title>
+            </Link2>
+          )}
         </span>
         <span className={isStale(deal) ? "font-semibold text-warning" : ""}>
           {deal.status === FOLLOW_UP_STATUS ? (
@@ -865,6 +878,7 @@ function GmailPanel({ deal, onLinked }) {
         const result = await api(`${apiPath(deal.id)}/gmail`);
         if (!active) return;
         setThread(result.thread);
+        if (result.deal) onLinked(result.deal);
         setForm({
           to: result.reply?.to || "",
           subject: result.reply?.subject || "",

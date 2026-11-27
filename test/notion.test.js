@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { listDeals, toDeal, updateDeal, updateProperties } from '../server/notion.js'
+import { conversationHas, listDeals, recordHas, toDeal, updateDeal, updateProperties } from '../server/notion.js'
 
 const page = {
   id: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa',
@@ -70,6 +70,36 @@ test('refuses writes to a page outside the tracker', async () => {
   try {
     await assert.rejects(updateDeal(page.id, { prop: 'status', value: 'Completed' }, '2026-11-24'), /outside the Collab Tracker/)
     assert.equal(calls, 1)
+  } finally {
+    globalThis.fetch = originalFetch
+    if (originalToken === undefined) delete process.env.NOTION_TOKEN
+    else process.env.NOTION_TOKEN = originalToken
+  }
+})
+
+test('records Has only when the conversation contents change, without touching Last Activity', async () => {
+  assert.deepEqual(toDeal(page).has, [])
+  assert.deepEqual(toDeal({ ...page, properties: { ...page.properties, Has: { multi_select: [{ name: 'Links' }] } } }).has, ['Links'])
+  assert.deepEqual(conversationHas({ attachments: true, links: true }), ['Attachments', 'Links'])
+  assert.deepEqual(conversationHas({ attachments: false, links: true }), ['Links'])
+  assert.deepEqual(updateProperties({ prop: 'has', value: ['Attachments'] }), { Has: { multi_select: [{ name: 'Attachments' }] } })
+
+  const originalFetch = globalThis.fetch
+  const originalToken = process.env.NOTION_TOKEN
+  process.env.NOTION_TOKEN = 'test-token'
+  const writes = []
+  const tracked = { ...page, parent: { data_source_id: '8206590b-d48c-825b-ac32-07e2152ec3e1' } }
+  globalThis.fetch = async (_url, options) => {
+    if (options?.method === 'PATCH') writes.push(JSON.parse(options.body).properties)
+    return { ok: true, json: async () => tracked }
+  }
+  try {
+    assert.equal(await recordHas({ ...toDeal(tracked), has: ['Links'] }, ['Links']), null)
+    assert.equal(writes.length, 0)
+    assert.ok(await recordHas(toDeal(tracked), ['Attachments', 'Links']))
+    assert.deepEqual(writes, [{ Has: { multi_select: [{ name: 'Attachments' }, { name: 'Links' }] } }])
+    globalThis.fetch = async () => { throw new Error('network down') }
+    assert.equal(await recordHas(toDeal(tracked), ['Links']), null)
   } finally {
     globalThis.fetch = originalFetch
     if (originalToken === undefined) delete process.env.NOTION_TOKEN

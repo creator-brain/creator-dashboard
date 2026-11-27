@@ -2,8 +2,9 @@ import express from 'express'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { parseEnv } from 'node:util'
-import { DATA_SOURCE_ID, INSTAGRAM_CONVERSATION, instagramConversationId, instagramLinkHandle, notion, pageMarkdown, reconcileFollowUps, toDeal, unlinkedInstagramDeals, updateDeal } from './notion.js'
+import { conversationHas, recordHas, DATA_SOURCE_ID, INSTAGRAM_CONVERSATION, instagramConversationId, instagramLinkHandle, notion, pageMarkdown, reconcileFollowUps, toDeal, unlinkedInstagramDeals, updateDeal } from './notion.js'
 import { normalizeInstagramHandle, sourceOf } from '../src/model.js'
+import { threadMessageLinks } from '../src/messageLinks.js'
 import { instagramAnalytics, instagramConfigured, instagramConversation, instagramConversations, instagramMessageFile, instagramDailyMetric, instagramLock, instagramScorecard, instagramSession, instagramUnlock, sendInstagramReply, validConversationId } from './instagram.js'
 import { gmailAttachmentParts, gmailAuthorize, gmailCallback, gmailConfigured, gmailConnected, gmailDisconnect, gmailPdfParts, gmailRequest, gmailThreadUrl, GMAIL_ATTACHMENT_DOWNLOAD_LIMIT, makeMessage, viewableAttachmentType, replyDetails, summarizeThread, threadIdFromUrl } from './gmail.js'
 import { validWebhookSignature, webhookChallenge } from './metaWebhook.js'
@@ -123,7 +124,13 @@ async function instagramDeal(req, res, next) {
 app.get('/api/meta/deals/:id', requireInstagramSession, instagramDeal, async (_req, res) => {
   const { instagram, conversationId } = res.locals
   if (!conversationId) return res.json({ conversation: null, contactHandle: res.locals.contactHandle })
-  res.json({ conversation: await instagramConversation(instagram, conversationId) })
+  const conversation = await instagramConversation(instagram, conversationId)
+  const has = conversationHas({
+    attachments: conversation.messages.some(message => message.media?.length),
+    links: threadMessageLinks(conversation.messages).length > 0,
+  })
+  const deal = await recordHas(res.locals.deal, has)
+  res.json({ conversation, ...(deal ? { deal } : {}) })
 })
 
 app.get('/api/meta/deals/:id/messages/:messageId/media/:index', requireInstagramSession, instagramDeal, async (req, res) => {
@@ -175,9 +182,10 @@ app.post('/api/meta/deals/:id/auto-link', sameSiteWrite, requireInstagramSession
   })
   res.json({ deal })
 })
-async function linkedThread(req) {
+async function linkedThread(req, res) {
   if (!/^[\da-f-]{32,36}$/i.test(req.params.id)) throw Object.assign(new Error('Invalid page ID.'), { status: 400 })
   const page = await notion(`/pages/${req.params.id}`)
+  if (res) res.locals.page = page
   if (page.parent?.data_source_id?.replaceAll('-', '') !== DATA_SOURCE_ID.replaceAll('-', '')) throw Object.assign(new Error('Page is outside the tracker.'), { status: 403 })
   const url = page.properties?.['Gmail Thread']?.url || ''
   const threadId = threadIdFromUrl(url)
@@ -186,12 +194,17 @@ async function linkedThread(req) {
 }
 app.get('/api/deals/:id/gmail', async (req, res, next) => {
   try {
-    const threadId = await linkedThread(req)
+    const threadId = await linkedThread(req, res)
     if (!threadId) return res.json({ thread: null, reply: null })
     const data = await gmailRequest(req, `/threads/${encodeURIComponent(threadId)}?format=full`)
     const profile = await gmailRequest(req, '/profile')
     const thread = summarizeThread(data, profile.emailAddress)
-    res.json({ thread, reply: replyDetails(thread, profile.emailAddress) })
+    const has = conversationHas({
+      attachments: thread.messages.some(mail => (mail.attachments || mail.pdfs || []).length),
+      links: threadMessageLinks(thread.messages).length > 0,
+    })
+    const deal = await recordHas(toDeal(res.locals.page), has)
+    res.json({ thread, reply: replyDetails(thread, profile.emailAddress), ...(deal ? { deal } : {}) })
   } catch (error) { next(error) }
 })
 // PDFs and real images (judged by their bytes) open in the browser tab; everything else downloads.
