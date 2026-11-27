@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
-import { ExternalLink, FileText, Instagram, Send } from 'lucide-react'
+import { ExternalLink, File, FileText, Film, Image as ImageIcon, Instagram, Send } from 'lucide-react'
+import { ThreadLinks } from './GmailAttachments.jsx'
 import { IntegrationCard } from './IntegrationCard.jsx'
 import { MessageText } from './MessageText.jsx'
 import { api, INSTAGRAM_MESSAGE_LIMIT, INSTAGRAM_REPLY_LIMIT, normalizeInstagramHandle } from './model.js'
@@ -92,6 +93,46 @@ function InstagramMessageMedia({ item, inboxUrl }) {
     <Icon size={13} className="shrink-0 self-center" aria-hidden="true" />
     <span>{item.name || mediaLabels[item.type]}</span>
   </a>
+}
+
+const mediaKinds = {
+  image: ['Image', ImageIcon], video: ['Video', Film], pdf: ['PDF', FileText], file: ['File', File],
+  share: ['Shared post', ExternalLink], story: ['Story', ExternalLink],
+}
+
+function AttachmentThumb({ item, Icon }) {
+  const [failed, setFailed] = useState(false)
+  if (item.preview && item.type === 'image' && !failed) return <img src={item.url} alt="" loading="lazy" referrerPolicy="no-referrer"
+    className="h-full w-full object-cover" onError={() => setFailed(true)} />
+  return <div className="grid h-full place-items-center text-primary/65"><Icon size={26} aria-hidden="true" /></div>
+}
+
+// Every image, video, file, shared post and Story across the conversation, like an email thread's attachments.
+export function InstagramAttachments({ messages }) {
+  const seen = new Set()
+  const items = messages.flatMap(message => message.media || []).filter(item => item.url && !seen.has(item.url) && seen.add(item.url))
+  if (!items.length) return null
+  return <section className="space-y-2" aria-label="Instagram attachments">
+    <h4 className="text-sm font-semibold">Attachments</h4>
+    <ul className="grid grid-cols-[repeat(auto-fill,minmax(min(100%,9rem),1fr))] gap-2">
+      {items.map(item => {
+        const [kind, Icon] = mediaKinds[item.type] || ['Attachment', File]
+        return <li key={item.url} className="min-w-0">
+          <a href={item.url} target="_blank" rel="noopener noreferrer" title={item.name || kind}
+            className="card h-full overflow-hidden rounded-lg border border-base-300 bg-base-100 hover:border-primary focus-visible:outline-2 focus-visible:outline-primary">
+            <div className="h-24 overflow-hidden border-b border-base-300 bg-base-200"><AttachmentThumb item={item} Icon={Icon} /></div>
+            <div className="flex items-center gap-2 p-2">
+              <span className="min-w-0 grow">
+                <span className="block truncate text-xs font-semibold">{item.name || kind}</span>
+                <span className="block text-[11px] text-base-content/70">{item.name ? `${kind} · Open` : 'Open'}</span>
+              </span>
+              <ExternalLink size={14} className="shrink-0 text-primary" aria-hidden="true" />
+            </div>
+          </a>
+        </li>
+      })}
+    </ul>
+  </section>
 }
 
 async function findInboxMatches(handle, page, { signal, maxPages = Infinity, onPage }) {
@@ -339,6 +380,8 @@ export function InstagramPanel({ deal, onLinked, onUnlocked }) {
         {(message.unsupported || (!message.text && !message.media?.length)) &&
           <a href={inboxUrl} target="_blank" rel="noopener noreferrer" className="link link-primary mt-2 inline-flex items-center gap-1 text-sm">View media or share in Instagram <ExternalLink size={13} /></a>}
       </details>)}
+      <InstagramAttachments messages={conversation.messages} />
+      <ThreadLinks messages={conversation.messages} label="Instagram links" />
       {!choices && <form onSubmit={sendReply} className="space-y-2 rounded-xl border border-base-300 p-3">
         <label className="block text-sm font-medium">Reply on Instagram
           <textarea className="textarea textarea-bordered mt-1 min-h-24 w-full" value={reply} maxLength={INSTAGRAM_REPLY_LIMIT}

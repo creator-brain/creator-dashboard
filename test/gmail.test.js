@@ -107,6 +107,14 @@ test('reports web links and attached files on the current Gmail message', () => 
   assert.ok(!JSON.stringify(mail).includes('secret-provider-id'))
 })
 
+test('collects links from Instagram message text', () => {
+  const links = threadMessageLinks([
+    { text: 'Hello!\n\n🩷guideline - https://walnut-beetle-22d.notion.site/Content-Brief-back2school-3bb2\n\nWarmly', media: [] },
+    { text: '', media: [{ url: 'https://lookaside.fbsbx.com/x.jpg', type: 'image' }] },
+  ])
+  assert.deepEqual(links, [{ url: 'https://walnut-beetle-22d.notion.site/Content-Brief-back2school-3bb2', label: 'https://walnut-beetle-22d.notion.site/Content-Brief-back2school-3bb2' }])
+})
+
 test('collects named and plain links across all messages without repeating destinations', () => {
   const links = threadMessageLinks([
     { body: 'See https://brand.example/brief and example.com/schedule.' },

@@ -29,7 +29,7 @@ export function threadMessageLinks(messages) {
     }
   }
   for (const message of messages) {
-    for (const { url, text: label } of inlineMessageLinks(message.body)) {
+    for (const { url, text: label } of inlineMessageLinks(message.body ?? message.text)) {
       if (!links.has(url)) links.set(url, { url, label })
     }
   }

@@ -115,11 +115,16 @@ export function GmailAttachments({ messages, gmailUrl, formatSize }) {
 }
 
 export function GmailLinks({ messages }) {
+  return <ThreadLinks messages={messages} label="Email links" />;
+}
+
+// Links found in a thread's messages (Gmail `body` or Instagram `text`), one row per destination.
+export function ThreadLinks({ messages, label }) {
   const links = threadMessageLinks(messages);
   if (!links.length) return null;
 
   return (
-    <section className="space-y-2" aria-label="Email links">
+    <section className="space-y-2" aria-label={label}>
       <h4 className="text-sm font-semibold">Links</h4>
       <ul className="list rounded-lg border border-base-300 bg-base-100">
         {links.map(({ url, label }) => (
