@@ -27,16 +27,17 @@ function UnlockInstagram({ onUnlock }) {
     setBusy(true)
     setError('')
     try {
-      const status = await api('/meta/unlock', { method: 'POST', body: JSON.stringify({ key: key.trim() }) })
+      const status = await api('/meta/unlock', { method: 'POST', body: JSON.stringify({ key }) })
       onUnlock(status)
     } catch (reason) { setError(reason.message) }
     finally { setBusy(false) }
   }
   return <form className="w-full space-y-2" onSubmit={unlock}>
-    <label className="block text-xs">Instagram inbox key
-      <input className="input input-bordered mt-1 w-full" type="password" autoComplete="current-password" value={key} onChange={event => setKey(event.target.value)} disabled={busy} />
+    <label className="block text-xs">Four-digit Instagram inbox code
+      <input className="input input-bordered mt-1 w-full" type="password" inputMode="numeric" pattern="[0-9]{4}" maxLength={4}
+        autoComplete="current-password" required value={key} onChange={event => setKey(event.target.value.replace(/[^0-9]/g, ''))} disabled={busy} />
     </label>
-    <div className="flex justify-end"><button className="btn btn-primary btn-sm" type="submit" disabled={busy || !key.trim()}>{busy && <span className="loading loading-spinner loading-xs" />} Unlock Instagram inbox</button></div>
+    <div className="flex justify-end"><button className="btn btn-primary btn-sm" type="submit" disabled={busy || key.length !== 4}>{busy && <span className="loading loading-spinner loading-xs" />} Unlock Instagram inbox</button></div>
     {error && <p className="text-sm text-error" role="alert">{error}</p>}
   </form>
 }

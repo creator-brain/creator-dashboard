@@ -7,7 +7,7 @@ test('Instagram inbox unlock gates reads and saves the selected inbox conversati
   const pageId = 'a'.repeat(32)
   const conversationId = 'instagram-thread'
   const tracker = '8206590b-d48c-825b-ac32-07e2152ec3e1'
-  const inboxKey = 'a'.repeat(64)
+  const inboxKey = '0368'
   const instagramField = 'Instagram Conversation ID'
   const page = {
     id: pageId, parent: { data_source_id: tracker },
@@ -205,13 +205,15 @@ test('Instagram inbox unlock gates reads and saves the selected inbox conversati
     method: 'POST', headers: { origin: requestOrigin, 'content-type': 'application/json' }, body: JSON.stringify({ key }),
   })
   assert.equal((await unlock(inboxKey, 'https://unrelated.example')).status, 403)
-  assert.equal((await unlock('b'.repeat(64))).status, 401)
+  assert.equal((await unlock('b'.repeat(64))).status, 400)
+  assert.equal((await unlock(3680)).status, 400)
+  assert.equal((await unlock('368')).status, 400)
+  assert.equal((await unlock('1234')).status, 401)
   assert.equal(stub.mock.callCount(), 0)
   const success = await unlock(inboxKey)
   assert.equal(success.status, 200)
   const session = cookie(success, 'cp_meta_inbox=')
   assert.ok(!session.includes('meta-token'))
-  assert.ok(!session.includes(inboxKey))
   assert.match(success.headers.get('set-cookie'), /HttpOnly; Secure; SameSite=Strict/i)
   const headers = { cookie: session, origin, 'content-type': 'application/json' }
   const forged = session.slice(0, -1) + (session.endsWith('A') ? 'B' : 'A')
@@ -382,7 +384,11 @@ test('Instagram inbox unlock gates reads and saves the selected inbox conversati
   const locked = await request('/lock', { method: 'POST', headers })
   assert.equal(locked.status, 200)
   assert.match(locked.headers.get('set-cookie'), /^cp_meta_inbox=;/)
-  process.env.META_INBOX_KEY = 'c'.repeat(64)
+  process.env.META_INBOX_KEY = '6820'
   assert.equal((await request('/deals/' + pageId, { headers })).status, 401)
   assert.equal((await request('/deals/' + pageId, { headers })).status, 401)
+  for (let i = 0; i < 5; i++) assert.equal((await unlock(inboxKey)).status, 401)
+  const throttled = await unlock('6820')
+  assert.equal(throttled.status, 429)
+  assert.ok(Number(throttled.headers.get('retry-after')) > 0)
 })

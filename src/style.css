@@ -40,6 +40,7 @@ button {
   cursor: pointer;
 }
 .sidebar {
+  --sidebar-selection: #82c8e5;
   background: var(--color-primary);
   color: var(--color-primary-content);
 }
@@ -60,8 +61,8 @@ button {
   padding-inline-end: 2.6rem;
 }
 .sidebar-link[aria-current="page"] {
-  background: var(--color-secondary);
-  color: var(--color-secondary-content);
+  background: var(--sidebar-selection);
+  color: var(--color-base-content);
   font-weight: 700;
 }
 .sidebar-stage {
@@ -81,7 +82,7 @@ button {
   color: white;
 }
 .sidebar-stage.active {
-  box-shadow: inset 3px 0 var(--color-secondary);
+  box-shadow: inset 3px 0 var(--sidebar-selection);
 }
 .sidebar .tone-dot {
   background: color-mix(in srgb, var(--tone) 35%, var(--tone-bg));

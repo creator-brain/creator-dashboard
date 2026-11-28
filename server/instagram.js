@@ -5,6 +5,10 @@ import { contentMetrics, creatorAccount } from '../src/analytics.js'
 const graph = 'https://graph.facebook.com/v27.0'
 const sessionCookie = 'cp_meta_inbox'
 const sessionSeconds = 7 * 24 * 60 * 60
+const inboxCode = /^[0-9]{4}$/
+const unlockWindow = 15 * 60 * 1000
+const unlockFailures = new Map()
+let nextUnlockCleanup = 0
 const failure = (message, status) => Object.assign(new Error(message), { status })
 const cookieOptions = req => ({ httpOnly: true, sameSite: 'strict', secure: Boolean(process.env.VERCEL) || req.secure, path: '/api/meta' })
 const readSession = req => req.get('cookie')?.split(';').map(part => part.trim()).find(part => part.startsWith(sessionCookie + '='))?.slice(sessionCookie.length + 1)
@@ -15,13 +19,15 @@ export const validConversationId = value => typeof value === 'string' && /^[\w=-
 
 export function instagramConfigured() {
   const { META_ACCESS_TOKEN, META_IG_ACCOUNT_ID, META_INBOX_KEY } = process.env
-  return Boolean(META_ACCESS_TOKEN && /^\d+$/.test(META_IG_ACCOUNT_ID || '') && /^[a-f0-9]{64}$/i.test(META_INBOX_KEY || ''))
+  return Boolean(META_ACCESS_TOKEN && /^\d+$/.test(META_IG_ACCOUNT_ID || '') && inboxCode.test(META_INBOX_KEY || ''))
 }
 
 function signature(payload) {
-  const signingKey = createHmac('sha256', process.env.META_INBOX_KEY).update('collab-pipeline:instagram-inbox:v1').digest()
+  const signingKey = createHmac('sha256', process.env.META_ACCESS_TOKEN)
+    .update('collab-pipeline:instagram-inbox:v2:' + process.env.META_INBOX_KEY)
+    .digest()
   return createHmac('sha256', signingKey)
-    .update(JSON.stringify([process.env.META_IG_ACCOUNT_ID, digest(process.env.META_ACCESS_TOKEN).toString('hex'), payload]))
+    .update(JSON.stringify([process.env.META_IG_ACCOUNT_ID, payload]))
     .digest('base64url')
 }
 
@@ -72,10 +78,29 @@ export function instagramSession(req) {
 
 export async function instagramUnlock(req, res) {
   if (!instagramConfigured()) throw failure('Instagram server setup is required.', 503)
-  const key = req.body?.key
-  if (typeof key !== 'string' || key.length !== 64 || !matches(key, process.env.META_INBOX_KEY)) {
-    throw failure('Incorrect Instagram inbox key.', 401)
+  const code = req.body?.key
+  if (typeof code !== 'string' || !inboxCode.test(code)) throw failure('Enter a four-digit Instagram inbox code.', 400)
+
+  const now = Date.now()
+  if (now >= nextUnlockCleanup) {
+    for (const [ip, attempts] of unlockFailures) {
+      if (attempts.until <= now) unlockFailures.delete(ip)
+    }
+    nextUnlockCleanup = now + unlockWindow
   }
+  const ip = (process.env.VERCEL && req.get('x-vercel-forwarded-for')) || req.ip
+  const prior = unlockFailures.get(ip)
+  const attempts = prior && prior.until > now ? prior : { count: 0, until: now + unlockWindow }
+  if (attempts.count >= 5) {
+    res.set('Retry-After', String(Math.ceil((attempts.until - now) / 1000)))
+    throw failure('Too many incorrect Instagram codes. Try again in a few minutes.', 429)
+  }
+  if (!matches(code, process.env.META_INBOX_KEY)) {
+    attempts.count++
+    unlockFailures.set(ip, attempts)
+    throw failure('Incorrect Instagram inbox code.', 401)
+  }
+  unlockFailures.delete(ip)
   const accountId = process.env.META_IG_ACCOUNT_ID
   await graphRequest(`/${accountId}/conversations`, { platform: 'instagram', fields: 'id', limit: '1' }, process.env.META_ACCESS_TOKEN)
   const payload = `${Math.floor(Date.now() / 1000) + sessionSeconds}.${randomBytes(16).toString('hex')}`
