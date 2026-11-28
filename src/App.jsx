@@ -2225,7 +2225,7 @@ export default function App() {
               <span className="badge badge-xs" aria-label={`${boardCount} open deals`}>{boardCount}</span>
             </button>
           </nav>
-          <main className="mx-auto max-w-[1800px] space-y-7 px-4 py-7 md:px-7">
+          <main className="mx-auto max-w-[1800px] space-y-7 px-4 py-7 md:px-7 lg:mx-0">
             {overview && !searchActive ? (
               <Suspense fallback={<span className="loading loading-spinner" role="status" aria-label="Loading Overview" />}>
                 <InstagramOverview
